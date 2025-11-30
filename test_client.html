@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Apex Blinds Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 50px; }
+        #chat-box { border: 1px solid #ccc; padding: 20px; height: 300px; overflow-y: scroll; margin-bottom: 10px; }
+        .user { color: blue; font-weight: bold; }
+        .ai { color: green; margin-bottom: 10px; display: block;}
+    </style>
+</head>
+<body>
+    <h1>Apex Blinds Chat Demo</h1>
+    <div id="chat-box"></div>
+    <input type="text" id="msg" placeholder="Ask about blinds..." style="width: 70%;">
+    <button onclick="send()" style="width: 20%;">Send</button>
+
+    <script>
+        // THIS IS YOUR KEY FROM THE DB
+        const MY_KEY = "a5adece9-2893-495a-ae1a-1ef115145338";
+
+        async function send() {
+            const input = document.getElementById('msg');
+            const box = document.getElementById('chat-box');
+            
+            // 1. Show User Message
+            box.innerHTML += `<div class="user">You: ${input.value}</div>`;
+            const text = input.value;
+            input.value = "";
+
+            // 2. Send to YOUR Server
+            const response = await fetch('http://localhost:3000/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    message: text,
+                    clientApiKey: MY_KEY 
+                })
+            });
+
+            const data = await response.json();
+
+            // 3. Show AI Reply
+            box.innerHTML += `<div class="ai">ApexBot: ${data.reply}</div>`;
+        }
+    </script>
+</body>
+</html>
