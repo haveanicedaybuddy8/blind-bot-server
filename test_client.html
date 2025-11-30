@@ -29,7 +29,7 @@
             input.value = "";
 
             // 2. Send to YOUR Server
-            const response = await fetch('http://localhost:3000/chat', {
+            const response = await fetch('https://blind-bot-server.onrender.com/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
