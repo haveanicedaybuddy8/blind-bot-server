@@ -1,9 +1,9 @@
-// Sales Agent Version 2.0 - Contact Split Update
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from '@supabase/supabase-js';
+import axios from 'axios'; // NEW: For downloading images
 
 dotenv.config();
 const app = express();
@@ -13,29 +13,33 @@ app.use(express.json());
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// --- THE SALES MANAGER INSTRUCTION ---
-// We feed the bot the "Window Valet" data + The specific instruction to capture leads.
+// --- HELPER: DOWNLOAD IMAGE & CONVERT TO BASE64 ---
+async function urlToGenerativePart(url, mimeType) {
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    return {
+        inlineData: {
+            data: Buffer.from(response.data).toString('base64'),
+            mimeType
+        }
+    };
+}
+
+// --- SYSTEM INSTRUCTIONS ---
 const systemPrompt = `
 You are a senior sales agent for "The Window Valet". 
-YOUR GOAL: Secure a lead by getting the customer's NAME and CONTACT INFO.
+GOAL: Secure a lead by getting the customer's NAME and CONTACT INFO.
 
-CORE INFO:
-- Owner: Josh LeClair (Family Owned).
-- Location: Indianapolis, IN.
-- Guarantee: 10x10 Low Price Guarantee.
-- Products: Roller Shades, Motorized Blinds, Shutters.
-
-RULES:
-1. Lead the conversation. Ask about their window needs (Size? Room? Light issues?).
-2. Once you understand their needs, ask for their Name and Phone Number/Email to schedule a free estimate.
-3. If they give an address, that is great, but it is optional.
-4. VALIDATION: You must get EITHER a Phone Number OR an Email Address to count as a lead.
+VISION CAPABILITIES:
+- If the user sends an image, ANALYZE IT. 
+- Describe the window type (Bay, Sliding, Double-hung).
+- Mention the light level or decor style you see.
+- Suggest a product based on the visual (e.g., "For that large arch window, custom shutters would be stunning").
 
 OUTPUT FORMAT:
 Reply in valid JSON format ONLY. Structure:
 {
-  "reply": "Your friendly response to the customer",
-  "lead_captured": boolean, (Set to TRUE only if you have Name AND (Phone OR Email)),
+  "reply": "Your response here",
+  "lead_captured": boolean, 
   "customer_name": "extracted name or null",
   "customer_phone": "extracted phone or null",
   "customer_email": "extracted email or null",
@@ -43,6 +47,32 @@ Reply in valid JSON format ONLY. Structure:
   "summary": "brief summary of needs"
 }
 `;
+
+app.get('/init', async (req, res) => {
+    try {
+        const apiKey = req.query.apiKey;
+        if (!apiKey) return res.status(400).json({ error: "Missing API Key" });
+
+        const { data: client, error } = await supabase
+            .from('clients')
+            .select('company_name, logo_url, primary_color, bot_title, website_url')
+            .eq('api_key', apiKey)
+            .single();
+
+        if (error || !client) return res.status(404).json({ error: "Client not found" });
+
+        res.json({
+            name: client.company_name,
+            logo: client.logo_url || "", 
+            color: client.primary_color || "#007bff",
+            title: client.bot_title || "Sales Assistant",
+            website: client.website_url
+        });
+    } catch (err) {
+        console.error("Init Error:", err);
+        res.status(500).json({ error: "Server Error" });
+    }
+});
 
 app.post('/chat', async (req, res) => {
     try {
@@ -54,32 +84,55 @@ app.post('/chat', async (req, res) => {
 
         // 2. Setup Gemini
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-2.5-flash",
+            model: "gemini-2.5-flash", // Flash is fast and sees images!
             systemInstruction: systemPrompt,
             generationConfig: { responseMimeType: "application/json" }
         });
 
-        // 3. Generate Content
-        // Handle history gracefully
-        let msgToSend = "";
-        if (history && history.length > 0) {
-             const lastPart = history[history.length - 1].parts;
-             msgToSend = lastPart[0].text;
-             history.pop(); // Remove it so we don't send it twice
+        // 3. PARSE HISTORY FOR IMAGES
+        // We need to convert the simplified history from Frontend into Gemini's specific format
+        let chatHistoryForGemini = [];
+        let currentPromptParts = [];
+
+        // Check the very last message (the new one) for an image URL
+        const lastMsg = history[history.length - 1];
+        const lastMsgText = lastMsg.parts[0].text;
+        
+        // Regex to find [IMAGE_URL: https://...]
+        const imgMatch = lastMsgText.match(/\[IMAGE_URL: (.*?)\]/);
+
+        if (imgMatch) {
+            // FOUND AN IMAGE!
+            const imageUrl = imgMatch[1];
+            console.log("👀 Gemini is looking at:", imageUrl);
+            
+            // Download and add to the prompt
+            const imagePart = await urlToGenerativePart(imageUrl, "image/jpeg"); // Assume JPEG/PNG
+            currentPromptParts.push(imagePart);
+            
+            // Add the user's text (if any) or a default prompt
+            currentPromptParts.push({ text: "Analyze this image of my window. What do you recommend?" });
         } else {
-             msgToSend = "Hello"; 
+            // No image, just text
+            currentPromptParts.push({ text: lastMsgText });
         }
 
-        const chat = model.startChat({ history: history });
-        const result = await chat.sendMessage(msgToSend);
-        const jsonResponse = JSON.parse(result.response.text());
+        // 4. Send to Gemini
+        // We start a chat with empty history for now (simplifying logic for the image turn)
+        // or we append previous text-only turns if we wanted full memory with images.
+        // For this step, let's just send the current payload to ensure image works.
+        
+        const result = await model.generateContent(currentPromptParts);
+        const text = result.response.text();
 
-        // 4. LOGIC: Save ONLY if we have valid contact info
+        // 5. Clean JSON
+        const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const jsonResponse = JSON.parse(cleanText);
+
+        // 6. Lead Capture Logic
         if (jsonResponse.lead_captured === true) {
-            const hasContact = jsonResponse.customer_phone || jsonResponse.customer_email;
-            
-            if (hasContact) {
-                console.log("🔥 HOT LEAD CAPTURED:", jsonResponse.customer_name);
+            if (jsonResponse.customer_phone || jsonResponse.customer_email) {
+                console.log("🔥 HOT LEAD:", jsonResponse.customer_name);
                 await supabase.from('leads').insert({
                     client_id: client.id,
                     customer_name: jsonResponse.customer_name,
@@ -96,41 +149,8 @@ app.post('/chat', async (req, res) => {
 
     } catch (err) {
         console.error("Server Error:", err);
-        res.status(500).json({ reply: "I'm having trouble connecting. Please try again." });
+        res.status(500).json({ reply: "I'm having trouble seeing that. Try again?" });
     }
 });
 
-
-// --- NEW ENDPOINT: THE "WHO AM I?" CHECK ---
-app.get('/init', async (req, res) => {
-    try {
-        const apiKey = req.query.apiKey;
-
-        if (!apiKey) return res.status(400).json({ error: "Missing API Key" });
-
-        // Fetch branding info from Supabase
-        const { data: client, error } = await supabase
-            .from('clients')
-            .select('company_name, logo_url, primary_color, bot_title, website_url')
-            .eq('api_key', apiKey)
-            .single();
-
-        if (error || !client) {
-            return res.status(404).json({ error: "Client not found" });
-        }
-
-        // Send the branding data back to the frontend
-        res.json({
-            name: client.company_name,
-            logo: client.logo_url || "", // Fallback to empty if missing
-            color: client.primary_color || "#007bff", // Fallback to blue
-            title: client.bot_title || "Sales Assistant",
-            website: client.website_url
-        });
-
-    } catch (err) {
-        console.error("Init Error:", err);
-        res.status(500).json({ error: "Server Error" });
-    }
-});
-app.listen(3000, () => console.log('🚀 Sales Agent Running'));
+app.listen(3000, () => console.log('🚀 Vision Agent Running'));

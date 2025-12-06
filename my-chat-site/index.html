@@ -1,122 +1,307 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>The Window Valet Chat</title>
+    <title>Chat Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f4f4f9; }
-        #chat-container { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        #chat-box { border: 1px solid #ddd; padding: 20px; height: 400px; overflow-y: scroll; margin-bottom: 15px; background: #fff; border-radius: 8px;}
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: transparent; }
         
-        /* Chat Bubble Styles */
-        .user { background: #007bff; color: white; padding: 10px 15px; border-radius: 15px 15px 0 15px; margin: 5px 0; display: inline-block; float: right; clear: both; max-width: 80%; }
-        .ai { background: #e9ecef; color: #333; padding: 10px 15px; border-radius: 15px 15px 15px 0; margin: 5px 0; display: inline-block; float: left; clear: both; max-width: 80%; }
-        
-        /* New Input Area Styles */
-        .controls { display: flex; gap: 10px; align-items: flex-end; }
-        
-        /* We use textarea now instead of input */
-        textarea { 
-            flex: 1; 
-            padding: 12px; 
-            border: 1px solid #ddd; 
-            border-radius: 5px; 
-            outline: none; 
-            resize: none; /* User can't drag to resize manually */
-            font-family: sans-serif;
-            overflow: hidden; /* Hides scrollbar for cleaner look */
+        #chat-container { 
+            background: white; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            overflow: hidden;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
         }
         
-        button { padding: 12px 20px; height: 42px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #218838; }
+        /* HEADER */
+        #header { 
+            padding: 15px; 
+            background: #333; 
+            color: white; 
+            display: flex; 
+            align-items: center; 
+            gap: 12px; 
+            font-weight: 600; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        #brand-logo { 
+            width: 32px; height: 32px; 
+            background: white; 
+            border-radius: 50%; 
+            padding: 2px; 
+            object-fit: contain;
+            display: none; 
+        }
+        
+        /* CHAT AREA */
+        #chat-box { 
+            flex: 1; 
+            padding: 20px; 
+            overflow-y: auto; 
+            background: #f8f9fa; 
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        /* BUBBLES */
+        .user { 
+            background: #333; 
+            color: white; 
+            padding: 12px 16px; 
+            border-radius: 18px 18px 0 18px; 
+            align-self: flex-end; 
+            max-width: 80%; 
+            word-wrap: break-word;
+            font-size: 14px;
+        }
+        .ai { 
+            background: #e9ecef; 
+            color: #2d3436; 
+            padding: 12px 16px; 
+            border-radius: 18px 18px 18px 0; 
+            align-self: flex-start; 
+            max-width: 80%; 
+            word-wrap: break-word;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        /* IMAGES */
+        .chat-img { 
+            max-width: 200px; 
+            border-radius: 12px; 
+            margin-top: 8px; 
+            display: block; 
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+
+        /* CONTROLS */
+        .controls { 
+            display: flex; 
+            gap: 10px; 
+            align-items: flex-end; 
+            padding: 15px; 
+            border-top: 1px solid #eee; 
+            background: white;
+        }
+        
+        /* TEXTAREA (The Magic Fix for Enter/Shift+Enter) */
+        textarea { 
+            flex: 1; 
+            padding: 12px 15px; 
+            border: 1px solid #e0e0e0; 
+            border-radius: 24px; 
+            outline: none; 
+            resize: none; 
+            font-family: inherit; 
+            max-height: 120px;
+            font-size: 14px;
+            overflow: hidden;
+        }
+        textarea:focus { border-color: #bbb; }
+        
+        /* BUTTONS */
+        .btn { 
+            height: 42px; 
+            border: none; 
+            border-radius: 24px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            color: white; 
+            background: #333; 
+            padding: 0 20px;
+        }
+        
+        /* PAPERCLIP */
+        #upload-label {
+            width: 42px; height: 42px; 
+            background: #f1f3f5; border-radius: 50%; 
+            display: flex; align-items: center; justify-content: center; 
+            cursor: pointer; font-size: 18px; color: #555;
+        }
+        #upload-label:hover { background: #e9ecef; }
+        #file-input { display: none; }
+        
+        #loader { display: none; text-align: center; font-size: 11px; color: #888; padding: 5px; }
     </style>
 </head>
 <body>
 
     <div id="chat-container">
-        <h2 style="text-align: center; color: #333;">The Window Valet</h2>
+        <div id="header">
+            <img id="brand-logo" src="" alt="">
+            <span id="brand-name">Chat Assistant</span>
+        </div>
+
         <div id="chat-box"></div>
-        
+        <div id="loader">Uploading image...</div>
+
         <div class="controls">
+            <label id="upload-label" for="file-input">📎</label>
+            <input type="file" id="file-input" accept="image/*" onchange="uploadImage()">
+            
             <textarea id="msg" placeholder="Type a message..." rows="1"></textarea>
-            <button onclick="send()">Send</button>
+            
+            <button id="send-btn" class="btn" onclick="send()">Send</button>
         </div>
     </div>
 
     <script>
-        // YOUR LIVE SERVER INFO
-        const SERVER_URL = "https://blind-bot-server.onrender.com/chat"; 
-        const API_KEY = "a5adece9-2893-495a-ae1a-1ef115145338"; 
+        // ============================================================
+        // 🛑 PASTE YOUR KEYS HERE OR IT WILL BE BLANK 🛑
+        // ============================================================
+        const SERVER_URL = "https://blind-bot-server.onrender.com"; 
+        const CLIENT_API_KEY = "a5adece9-2893-495a-ae1a-1ef115145338"; // Your specific client key
+
+        // Use the "ey..." key for SUPABASE_KEY
+        const SUPABASE_URL = "https://iashgsuvdedpdmytdbgw.supabase.co"; 
+        const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlhc2hnc3V2ZGVkcGRteXRkYmd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODMyNDIsImV4cCI6MjA4MDA1OTI0Mn0.nUyhba86frTJDqqAEfZnjF4s_5sTnda7TjIoKDo2wbc"; 
+        // ============================================================
+
+        // Initialize Supabase
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let history = []; 
+        let brandColor = "#007bff"; 
 
-        // 1. AUTO-RESIZE & ENTER KEY LOGIC
+        // 1. BOOT UP: Apply Branding
+        async function initChat() {
+            try {
+                const response = await fetch(`${SERVER_URL}/init?apiKey=${CLIENT_API_KEY}`);
+                const data = await response.json();
+
+                if (data.error) return console.error(data.error);
+
+                // Apply Data
+                document.getElementById('brand-name').innerText = data.title;
+                brandColor = data.color;
+
+                // Apply Colors
+                document.getElementById('header').style.backgroundColor = brandColor;
+                document.getElementById('send-btn').style.backgroundColor = brandColor;
+                
+                const style = document.createElement('style');
+                style.innerHTML = `.user { background-color: ${brandColor} !important; }`;
+                document.head.appendChild(style);
+
+                // Apply Logo
+                if (data.logo) {
+                    const img = document.getElementById('brand-logo');
+                    img.src = data.logo;
+                    img.style.display = 'block';
+                }
+
+            } catch (err) {
+                console.error("Init failed", err);
+            }
+        }
+
+        // 2. IMAGE UPLOAD LOGIC
+        async function uploadImage() {
+            const fileInput = document.getElementById('file-input');
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            document.getElementById('loader').style.display = 'block';
+
+            // Clean filename
+            const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '');
+            const fileName = `uploads/${Date.now()}_${cleanName}`;
+
+            // Upload to Supabase
+            const { data, error } = await supabase.storage
+                .from('chat-uploads')
+                .upload(fileName, file);
+
+            document.getElementById('loader').style.display = 'none';
+
+            if (error) {
+                alert("Upload failed: " + error.message);
+                return;
+            }
+
+            // Get URL
+            const { data: urlData } = supabase.storage
+                .from('chat-uploads')
+                .getPublicUrl(fileName);
+            const publicUrl = urlData.publicUrl;
+
+            // Show in chat
+            const box = document.getElementById('chat-box');
+            box.innerHTML += `
+                <div class="user">
+                    <img src="${publicUrl}" class="chat-img">
+                </div>
+            `;
+            box.scrollTop = box.scrollHeight;
+
+            history.push({ 
+                role: "user", 
+                parts: [
+                    { text: "I uploaded an image." },
+                    { text: `[IMAGE_URL: ${publicUrl}]` } 
+                ] 
+            });
+        }
+
+        // 3. SEND MESSAGE LOGIC (ENTER vs SHIFT+ENTER)
         const msgInput = document.getElementById('msg');
-
-        // Make box grow as you type
+        
         msgInput.addEventListener('input', function() {
-            this.style.height = 'auto'; // Reset
-            this.style.height = (this.scrollHeight) + 'px'; // Grow
-            if(this.value === '') this.style.height = 'auto'; 
+            this.style.height = 'auto'; 
+            this.style.height = (this.scrollHeight) + 'px'; 
         });
 
-        // Handle Keys
-        msgInput.addEventListener('keydown', function(event) {
-            if (event.key === 'Enter') {
-                if (event.shiftKey) {
-                    // Shift+Enter = New Line (Do nothing, let default happen)
-                    return;
-                } else {
-                    // Just Enter = Send Message
-                    event.preventDefault(); // Stop new line
-                    send();
+        msgInput.addEventListener('keydown', function(e) {
+            // If Enter is pressed...
+            if (e.key === 'Enter') {
+                // ...and Shift is NOT held down
+                if (!e.shiftKey) {
+                    e.preventDefault(); // Stop new line
+                    send(); // Send message
                 }
+                // If Shift IS held down, do nothing (allow new line)
             }
         });
 
         async function send() {
             const box = document.getElementById('chat-box');
-            const userText = msgInput.value.trim(); // .trim() removes empty spaces
-            
-            if (!userText) return;
+            const text = msgInput.value.trim();
+            if (!text) return;
 
-            // 1. Show User Message
-            box.innerHTML += `<div class="user">${userText.replace(/\n/g, "<br>")}</div>`; // Convert newlines to HTML breaks
+            box.innerHTML += `<div class="user">${text.replace(/\n/g, "<br>")}</div>`;
             msgInput.value = "";
-            msgInput.style.height = 'auto'; // Reset size
+            msgInput.style.height = 'auto';
             box.scrollTop = box.scrollHeight;
 
-            // 2. Add to Memory
-            history.push({ role: "user", parts: [{ text: userText }] });
+            history.push({ role: "user", parts: [{ text: text }] });
 
-            // 3. Send to Server
             try {
-                const response = await fetch(SERVER_URL, {
+                const response = await fetch(`${SERVER_URL}/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        history: history, 
-                        clientApiKey: API_KEY 
-                    })
+                    body: JSON.stringify({ history: history, clientApiKey: CLIENT_API_KEY })
                 });
-
                 const data = await response.json();
-
-                // 4. Show AI Reply
-                // We interpret **bold** as <b>bold</b> for prettier text
-                let cleanReply = data.reply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
                 
-                box.innerHTML += `<div class="ai">${cleanReply}</div>`;
+                let reply = data.reply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+                box.innerHTML += `<div class="ai">${reply}</div>`;
                 box.scrollTop = box.scrollHeight;
-
-                // 5. Add AI Reply to Memory
                 history.push({ role: "model", parts: [{ text: data.reply }] });
 
             } catch (err) {
-                console.error(err);
-                box.innerHTML += `<div class="ai" style="color:red">Connection Error.</div>`;
+                box.innerHTML += `<div class="ai" style="color:#d9534f">Connection Error</div>`;
             }
         }
-    </script>
 
+        // Start App
+        initChat();
+
+    </script>
 </body>
 </html>
