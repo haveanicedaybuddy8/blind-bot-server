@@ -100,4 +100,37 @@ app.post('/chat', async (req, res) => {
     }
 });
 
+
+// --- NEW ENDPOINT: THE "WHO AM I?" CHECK ---
+app.get('/init', async (req, res) => {
+    try {
+        const apiKey = req.query.apiKey;
+
+        if (!apiKey) return res.status(400).json({ error: "Missing API Key" });
+
+        // Fetch branding info from Supabase
+        const { data: client, error } = await supabase
+            .from('clients')
+            .select('company_name, logo_url, primary_color, bot_title, website_url')
+            .eq('api_key', apiKey)
+            .single();
+
+        if (error || !client) {
+            return res.status(404).json({ error: "Client not found" });
+        }
+
+        // Send the branding data back to the frontend
+        res.json({
+            name: client.company_name,
+            logo: client.logo_url || "", // Fallback to empty if missing
+            color: client.primary_color || "#007bff", // Fallback to blue
+            title: client.bot_title || "Sales Assistant",
+            website: client.website_url
+        });
+
+    } catch (err) {
+        console.error("Init Error:", err);
+        res.status(500).json({ error: "Server Error" });
+    }
+});
 app.listen(3000, () => console.log('🚀 Sales Agent Running'));
