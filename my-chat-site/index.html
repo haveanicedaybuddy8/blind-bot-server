@@ -143,7 +143,7 @@
 
         <div class="controls">
             <label id="upload-label" for="file-input">📎</label>
-            <input type="file" id="file-input" accept="image/*" onchange="uploadImage()">
+            <input type="file" id="file-input" accept="image/*" multiple onchange="uploadImage()">
             
             <textarea id="msg" placeholder="Type a message..." rows="1"></textarea>
             
@@ -204,49 +204,82 @@
         // 2. IMAGE UPLOAD LOGIC
         async function uploadImage() {
             const fileInput = document.getElementById('file-input');
-            const file = fileInput.files[0];
-            if (!file) return;
+            const files = fileInput.files; // Get ALL selected files
+            if (files.length === 0) return;
 
             document.getElementById('loader').style.display = 'block';
+            document.getElementById('loader').innerText = `Uploading ${files.length} photos...`;
 
-            // Clean filename
-            const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '');
-            const fileName = `uploads/${Date.now()}_${cleanName}`;
+            // Prepare the message parts for history
+            let messageParts = [];
+            let displayHTML = "";
 
-            // Upload to Supabase
-            const { data, error } = await supabase.storage
-                .from('chat-uploads')
-                .upload(fileName, file);
+            // Loop through every file
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '');
+                const fileName = `uploads/${Date.now()}_${i}_${cleanName}`;
+
+                // Upload
+                const { error } = await supabase.storage
+                    .from('chat-uploads')
+                    .upload(fileName, file);
+
+                if (error) {
+                    console.error("Upload failed for " + file.name);
+                    continue;
+                }
+
+                // Get URL
+                const { data: urlData } = supabase.storage
+                    .from('chat-uploads')
+                    .getPublicUrl(fileName);
+                
+                const publicUrl = urlData.publicUrl;
+
+                // Add to visual stack
+                displayHTML += `<img src="${publicUrl}" class="chat-img">`;
+                
+                // Add to data stack
+                messageParts.push({ text: `[IMAGE_URL: ${publicUrl}]` });
+            }
 
             document.getElementById('loader').style.display = 'none';
 
-            if (error) {
-                alert("Upload failed: " + error.message);
-                return;
-            }
-
-            // Get URL
-            const { data: urlData } = supabase.storage
-                .from('chat-uploads')
-                .getPublicUrl(fileName);
-            const publicUrl = urlData.publicUrl;
-
-            // Show in chat
+            // Show all images in one bubble
             const box = document.getElementById('chat-box');
             box.innerHTML += `
                 <div class="user">
-                    <img src="${publicUrl}" class="chat-img">
+                    ${displayHTML}
                 </div>
             `;
             box.scrollTop = box.scrollHeight;
 
+            // Push to History
             history.push({ 
                 role: "user", 
-                parts: [
-                    { text: "I uploaded an image." },
-                    { text: `[IMAGE_URL: ${publicUrl}]` } 
-                ] 
+                parts: messageParts 
             });
+
+            // --- AUTO TRIGGER THE BOT ---
+            // Now we force the bot to look at the photos immediately
+            try {
+                const response = await fetch(`${SERVER_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ history: history, clientApiKey: CLIENT_API_KEY })
+                });
+                
+                const data = await response.json();
+                let reply = data.reply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+                
+                box.innerHTML += `<div class="ai">${reply}</div>`;
+                box.scrollTop = box.scrollHeight;
+                history.push({ role: "model", parts: [{ text: data.reply }] });
+
+            } catch (err) {
+                box.innerHTML += `<div class="ai" style="color:#d9534f">I received the photos but couldn't analyze them just yet.</div>`;
+            }
         }
 
         // 3. SEND MESSAGE LOGIC (ENTER vs SHIFT+ENTER)
