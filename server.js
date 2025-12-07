@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
+import FormData from 'form-data';
 
 dotenv.config();
 const app = express();
@@ -45,6 +46,11 @@ RULES:
 3. **Preference:** Ask: "Do you prefer we contact you via phone, text, or email?"
 4. **Validation:** If they give a time but no phone/email, keep asking for contact info. You cannot book a slot without a contact.
 
+TOOLS:
+- You can GENERATE RENDERINGS. 
+- If the user uploads a photo and asks to see a product (e.g. "Show me zebra blinds"), set "visualize": true.
+- In "visual_style", describe the NEW product clearly (e.g. "modern white zebra blinds, luxury style").
+
 OUTPUT FORMAT:
 Reply in valid JSON format ONLY. Structure:
 {
@@ -57,7 +63,9 @@ Reply in valid JSON format ONLY. Structure:
   "appointment_request": "extracted date/time preference or null",
   "preferred_method": "Phone, Text, or Email",
   "ai_summary": "A 2-sentence summary of what they want and their vibe (e.g. 'Customer wants zebra blinds for living room, very price conscious, requested Tuesday visit.')"
-}
+  "visualize": boolean, 
+  "visual_style": "description for the artist"
+  }
 `;
 
 app.get('/init', async (req, res) => {
@@ -73,6 +81,60 @@ app.get('/init', async (req, res) => {
         });
     } catch (err) { res.status(500).json({ error: "Server Error" }); }
 });
+// --- HELPER: PAINT THE WINDOW (Stability AI) ---
+async function generateRendering(imageUrl, stylePrompt) {
+    try {
+        console.log("🎨 Painting:", stylePrompt);
+        
+        // 1. Download the user's original photo
+        const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(imageResponse.data);
+
+        // 2. Prepare the payload
+        const payload = new FormData();
+        payload.append('init_image', buffer);
+        payload.append('init_image_mode', 'IMAGE_STRENGTH');
+        payload.append('image_strength', 0.35); // 0.35 = Keep 65% of original room, change 35%
+        payload.append('text_prompts[0][text]', `${stylePrompt}, interior design photography, 8k, realistic`);
+        payload.append('text_prompts[0][weight]', 1);
+        payload.append('cfg_scale', 7);
+        payload.append('steps', 30);
+
+        // 3. Call Stability API
+        const response = await axios.post(
+            'https://api.stability.ai/v1/generation/stable-diffusion-v1-6/image-to-image',
+            payload,
+            {
+                headers: {
+                    ...payload.getHeaders(),
+                    Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
+                    Accept: 'application/json',
+                },
+            }
+        );
+
+        // 4. Save result to Supabase
+        const base64Image = response.data.artifacts[0].base64;
+        const imageBuffer = Buffer.from(base64Image, 'base64');
+        const fileName = `renderings/${Date.now()}_ai.png`;
+
+        const { error } = await supabase.storage
+            .from('chat-uploads')
+            .upload(fileName, imageBuffer, { contentType: 'image/png' });
+
+        if (error) throw error;
+
+        const { data: urlData } = supabase.storage
+            .from('chat-uploads')
+            .getPublicUrl(fileName);
+
+        return urlData.publicUrl;
+
+    } catch (error) {
+        console.error("Rendering Failed:", error.response?.data || error.message);
+        return null;
+    }
+}
 
 app.post('/chat', async (req, res) => {
     try {
@@ -117,7 +179,37 @@ app.post('/chat', async (req, res) => {
         const result = await model.generateContent(currentPromptParts);
         const text = result.response.text();
         const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const jsonResponse = JSON.parse(cleanText);
+        const jsonResponse = JSON.parse(cleanText);// ... after const jsonResponse = JSON.parse(cleanText); ...
+
+        // 7. VISUALIZATION LOGIC
+        if (jsonResponse.visualize === true) {
+            
+            // Find the last image the user sent
+            let sourceImageUrl = null;
+            // Scan history backwards
+            for (let i = history.length - 1; i >= 0; i--) {
+                const parts = history[i].parts;
+                for (const part of parts) {
+                    const match = part.text.match(/\[IMAGE_URL: (.*?)\]/);
+                    if (match) {
+                        sourceImageUrl = match[1];
+                        break;
+                    }
+                }
+                if (sourceImageUrl) break;
+            }
+
+            if (sourceImageUrl) {
+                console.log("🎨 Generating Render...");
+                const renderedUrl = await generateRendering(sourceImageUrl, jsonResponse.visual_style);
+                
+                if (renderedUrl) {
+                    jsonResponse.reply += `\n\n[RENDER_URL: ${renderedUrl}]`; 
+                } else {
+                    jsonResponse.reply += " (I couldn't generate the preview right now.)";
+                }
+            }
+        }
 
         // 4. LEAD CAPTURE LOGIC (STRICT)
         // Only save if lead_captured is TRUE (which Gemini only sets if Name + Contact exists)
