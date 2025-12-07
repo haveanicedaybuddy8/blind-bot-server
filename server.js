@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import FormData from 'form-data';
+import sharp from 'sharp'; // The Image Processor
 
 dotenv.config();
 const app = express();
@@ -30,17 +31,61 @@ async function urlToGenerativePart(url) {
     }
 }
 
-// --- HELPER: GENERATE RENDERING (Stability AI) ---
+// --- HELPER: SMART RESIZE FOR SDXL ---
+async function smartResize(buffer) {
+    // 1. Get original dimensions
+    const metadata = await sharp(buffer).metadata();
+    const ratio = metadata.width / metadata.height;
+
+    // 2. Define Stability AI's Allowed Dimensions (The "Buckets")
+    const allowedSizes = [
+        { w: 1024, h: 1024, r: 1.00 }, // Square
+        { w: 1152, h: 896,  r: 1.29 }, // Slightly Wide
+        { w: 896,  h: 1152, r: 0.78 }, // Slightly Tall
+        { w: 1216, h: 832,  r: 1.46 }, // Wider
+        { w: 832,  h: 1216, r: 0.68 }, // Taller
+        { w: 1344, h: 768,  r: 1.75 }, // Very Wide (16:9ish)
+        { w: 768,  h: 1344, r: 0.57 }, // Very Tall (9:16ish)
+        { w: 1536, h: 640,  r: 2.40 }, // Ultra Wide
+        { w: 640,  h: 1536, r: 0.42 }, // Ultra Tall
+    ];
+
+    // 3. Find the closest match
+    // We compare the user's ratio to the allowed ratios and pick the winner
+    let bestMatch = allowedSizes[0];
+    let minDiff = Math.abs(ratio - bestMatch.r);
+
+    for (const size of allowedSizes) {
+        const diff = Math.abs(ratio - size.r);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestMatch = size;
+        }
+    }
+
+    console.log(`🎨 Smart Resize: Original ${metadata.width}x${metadata.height} (${ratio.toFixed(2)}) -> Target ${bestMatch.w}x${bestMatch.h}`);
+
+    // 4. Resize to that specific target
+    return await sharp(buffer)
+        .resize(bestMatch.w, bestMatch.h, { fit: 'cover' }) // 'cover' prevents squishing
+        .toBuffer();
+}
+
+// --- HELPER: GENERATE RENDERING ---
 async function generateRendering(imageUrl, stylePrompt) {
     try {
-        console.log("🎨 Calling Stability AI...");
+        console.log("🎨 Downloading original image...");
         const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-        const buffer = Buffer.from(imageResponse.data);
+        let buffer = Buffer.from(imageResponse.data);
 
+        // USE SMART RESIZE HERE
+        buffer = await smartResize(buffer);
+
+        console.log("🎨 Sending to Stability API...");
         const payload = new FormData();
-        payload.append('init_image', buffer);
+        payload.append('init_image', buffer, { filename: 'source.jpg', contentType: 'image/jpeg' });
         payload.append('init_image_mode', 'IMAGE_STRENGTH');
-        payload.append('image_strength', 0.35); // Keep 65% of original structure
+        payload.append('image_strength', 0.35); // Keep 65% of original room
         payload.append('text_prompts[0][text]', `${stylePrompt}, interior design photography, 8k, realistic, high quality`);
         payload.append('text_prompts[0][weight]', 1);
         payload.append('cfg_scale', 7);
@@ -58,6 +103,7 @@ async function generateRendering(imageUrl, stylePrompt) {
             }
         );
 
+        console.log("🎨 Stability Success! Saving result...");
         const base64Image = response.data.artifacts[0].base64;
         const imageBuffer = Buffer.from(base64Image, 'base64');
         const fileName = `renderings/${Date.now()}_ai.png`;
@@ -69,7 +115,11 @@ async function generateRendering(imageUrl, stylePrompt) {
         return urlData.publicUrl;
 
     } catch (error) {
-        console.error("Rendering Error Details:", error.response?.data || error.message);
+        if (error.response) {
+            console.error("❌ Stability API Error:", error.response.status, JSON.stringify(error.response.data));
+        } else {
+            console.error("❌ Internal Rendering Error:", error.message);
+        }
         return null;
     }
 }
@@ -83,13 +133,14 @@ RULES:
 2. **The Home Visit:** Try to schedule a "Free In-Home Estimate."
 3. **Contact Info:** You MUST get their Name AND (Phone OR Email). 
 
-TOOLS (VISUALIZATION):
-- IF the user asks to see a product (e.g. "show me zebra blinds", "preview", "rendering"), you MUST set "visualize": true.
-- In "visual_style", describe the product clearly (e.g. "modern white zebra blinds, luxury style").
+TOOLS:
+- You can GENERATE RENDERINGS. 
+- If the user asks to see a product (e.g. "preview", "show me zebra blinds"), set "visualize": true.
+- In "visual_style", describe the NEW product clearly (e.g. "modern black and white zebra blinds").
 
 OUTPUT FORMAT (JSON ONLY):
 {
-  "reply": "Your friendly response",
+  "reply": "Your response",
   "lead_captured": boolean,
   "customer_name": "...",
   "customer_phone": "...",
@@ -127,12 +178,10 @@ app.post('/chat', async (req, res) => {
             generationConfig: { responseMimeType: "application/json" }
         });
 
-        // 1. MEMORY SETUP
         const lastTurn = history.pop(); 
         const pastHistory = history;
         const chat = model.startChat({ history: pastHistory });
 
-        // 2. IMAGE DETECTION (For Gemini's eyes)
         let currentParts = [];
         let foundImage = false;
         let sourceImageUrl = null;
@@ -153,28 +202,18 @@ app.post('/chat', async (req, res) => {
             currentParts.push({ text: "I have uploaded photos. Please analyze them." });
         }
 
-        // 3. GENERATE RESPONSE
         const result = await chat.sendMessage(currentParts);
         const cleanText = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
         const jsonResponse = JSON.parse(cleanText);
 
-        // DEBUG LOG: See what Gemini actually decided
-        console.log("🤖 Gemini Decision -> Visualize:", jsonResponse.visualize, "| Style:", jsonResponse.visual_style);
-
-        // 4. VISUALIZATION LOGIC
+        // --- VISUALIZATION LOGIC ---
         if (jsonResponse.visualize === true) {
-            
-            // If no image in THIS message, hunt through history for the last uploaded photo
             if (!sourceImageUrl) {
                  for (let i = pastHistory.length - 1; i >= 0; i--) {
                     const parts = pastHistory[i].parts;
                     for (const part of parts) {
                         const match = part.text.match(/\[IMAGE_URL: (.*?)\]/);
-                        if (match) { 
-                            sourceImageUrl = match[1]; 
-                            console.log("🔍 Found previous image in history:", sourceImageUrl);
-                            break; 
-                        }
+                        if (match) { sourceImageUrl = match[1]; break; }
                     }
                     if (sourceImageUrl) break;
                  }
@@ -182,33 +221,20 @@ app.post('/chat', async (req, res) => {
 
             if (sourceImageUrl) {
                 // CREDIT CHECK
-                const { data: creditCheck } = await supabase.from('clients').select('image_credits').eq('id', client.id).single();
+                const { data: wallet } = await supabase.from('clients').select('image_credits').eq('id', client.id).single();
                 
-                if (!creditCheck || creditCheck.image_credits < 1) {
-                    console.log("⛔ Rendering blocked: No credits.");
-                    jsonResponse.reply += " (I'd love to show you a preview, but your account is out of credits. Please contact support!)";
+                if (!wallet || wallet.image_credits < 1) {
+                    jsonResponse.reply += " (I'd love to generate a preview, but your account is out of credits.)";
                 } else {
-                    // DEDUCT & PAINT
-                    await supabase.from('clients').update({ image_credits: creditCheck.image_credits - 1 }).eq('id', client.id);
+                    await supabase.from('clients').update({ image_credits: wallet.image_credits - 1 }).eq('id', client.id);
                     await supabase.from('credit_usage').insert({ client_id: client.id, credits_spent: 1, action_type: 'rendering' });
                     
                     const renderedUrl = await generateRendering(sourceImageUrl, jsonResponse.visual_style);
-                    
-                    if (renderedUrl) {
-                        console.log("✅ Rendering success:", renderedUrl);
-                        jsonResponse.reply += `\n\n[RENDER_URL: ${renderedUrl}]`;
-                    } else {
-                        console.log("❌ Rendering failed at Stability API.");
-                        jsonResponse.reply += " (I tried to paint the preview, but the artist is busy. Please try again in a moment!)";
-                    }
+                    if (renderedUrl) jsonResponse.reply += `\n\n[RENDER_URL: ${renderedUrl}]`;
                 }
-            } else {
-                console.log("⚠️ Visualize requested, but NO source image found in history.");
-                jsonResponse.reply += " (Please upload a photo of your window first so I can visualize that for you!)";
             }
         }
 
-        // 5. SAVE LEAD
         if (jsonResponse.lead_captured && (jsonResponse.customer_phone || jsonResponse.customer_email)) {
             await supabase.from('leads').insert({
                 client_id: client.id,
@@ -231,4 +257,4 @@ app.post('/chat', async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('🚀 Final SaaS Server Running'));
+app.listen(3000, () => console.log('🚀 Smart-Resize Agent Running'));
