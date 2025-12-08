@@ -6,7 +6,9 @@ import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import FormData from 'form-data';
 import sharp from 'sharp'; // The Image Processor
-import pdf from 'pdf-parse';
+import { createRequire } from 'module'; 
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { TaskType } from "@google/generative-ai";
 
