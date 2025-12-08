@@ -6,6 +6,9 @@ import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import FormData from 'form-data';
 import sharp from 'sharp'; // The Image Processor
+import pdf from 'pdf-parse';
+import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import { TaskType } from "@google/generative-ai";
 
 dotenv.config();
 const app = express();
@@ -124,6 +127,37 @@ async function generateRendering(imageUrl, stylePrompt) {
     }
 }
 
+// --- HELPER: CREATE EMBEDDINGS (THE "BRAIN" STORAGE) ---
+async function createEmbedding(text) {
+    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004"});
+    const result = await embeddingModel.embedContent({
+        content: { parts: [{ text }] },
+        taskType: TaskType.RETRIEVAL_DOCUMENT,
+    });
+    return result.embedding.values;
+}
+
+// --- NEW HELPER: ANALYZE IMAGE WITH GEMINI VISION ---
+async function analyzeProductImage(imageUrl) {
+    try {
+        const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+        const base64Data = Buffer.from(response.data).toString('base64');
+        
+        const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = "Describe this window treatment product in extreme visual detail for a generative AI prompt. Include texture, material, transparency (sheer/opaque), and style. Start with 'A photo of...'. Keep it under 50 words.";
+        
+        const result = await visionModel.generateContent([
+            prompt,
+            { inlineData: { data: base64Data, mimeType: "image/jpeg" } }
+        ]);
+        
+        return result.response.text();
+    } catch (e) {
+        console.error("Failed to analyze image:", imageUrl);
+        return null;
+    }
+}
+
 const systemPrompt = `
 You are a senior sales agent for "The Window Valet". 
 GOAL: Secure a lead by getting the customer's CONTACT INFO and a HOME VISIT TIME.
@@ -171,22 +205,137 @@ app.get('/init', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Server Error" }); }
 });
 
+app.post('/train-agent', async (req, res) => {
+    try {
+        const { clientApiKey } = req.body; // We only need the API Key now
+        
+        // 1. Fetch Client Data (PDF + Gallery Images)
+        const { data: client } = await supabase
+            .from('clients')
+            .select('id, training_pdf, gallery_images')
+            .eq('api_key', clientApiKey)
+            .single();
+
+        if (!client) return res.status(401).json({ error: "Invalid API Key" });
+
+        console.log(`🧠 Starting training for ${client.id}...`);
+        
+        // --- PART A: PROCESS PDF (Sales Knowledge) ---
+        if (client.training_pdf) {
+            try {
+                const response = await axios.get(client.training_pdf, { responseType: 'arraybuffer' });
+                const pdfData = await pdf(Buffer.from(response.data));
+                const chunks = pdfData.text.split('\n\n').filter(c => c.length > 50);
+
+                for (const chunk of chunks) {
+                    const vector = await createEmbedding(chunk);
+                    await supabase.from('documents').insert({
+                        client_id: client.id,
+                        content: `[SALES KNOWLEDGE] ${chunk}`,
+                        embedding: vector
+                    });
+                }
+                console.log("📄 PDF Knowledge Processed");
+            } catch (e) { console.error("PDF Error:", e.message); }
+        }
+
+        // --- PART B: PROCESS GALLERY (Visual Knowledge) ---
+        if (client.gallery_images) {
+            // Softr stores images as comma-separated string: "url1,url2,url3"
+            const imageUrls = client.gallery_images.split(',').map(url => url.trim());
+            
+            for (const url of imageUrls) {
+                if (!url) continue;
+                
+                // 1. Ask Gemini to "Look" at the product
+                const visualDescription = await analyzeProductImage(url);
+                
+                if (visualDescription) {
+                    // 2. Save this description so the Chatbot can find it later
+                    // We tag it as [PRODUCT VISUAL] so we know it's for generating images
+                    const content = `[PRODUCT VISUAL] Reference Description: ${visualDescription}. Use this style when the user asks to see this product. Source URL: ${url}`;
+                    const vector = await createEmbedding(content);
+                    
+                    await supabase.from('documents').insert({
+                        client_id: client.id,
+                        content: content,
+                        embedding: vector
+                    });
+                    console.log("👁️ Learned visual style for:", visualDescription.substring(0, 30) + "...");
+                }
+            }
+        }
+
+        res.json({ success: true, message: "Agent trained on PDF and Gallery Photos!" });
+
+    } catch (err) {
+        console.error("Training Error:", err);
+        res.status(500).json({ error: "Training Failed" });
+    }
+});
+
 app.post('/chat', async (req, res) => {
     try {
         const { history, clientApiKey } = req.body;
         const { data: client } = await supabase.from('clients').select('*').eq('api_key', clientApiKey).single();
-        if (!client || client.status !== 'active') return res.json({ reply: "Service Suspended." });
+        if (!client) return res.json({ reply: "Service Suspended." });
+
+        // 1. GET USER'S LAST MESSAGE
+        // We look at the last message to generate the search vector
+        const lastMessageObj = history[history.length - 1]; 
+        const userQuery = lastMessageObj.parts.map(p => p.text).join(' ');
+
+        // 2. SEARCH KNOWLEDGE BASE (RAG)
+        let contextText = "";
+        try {
+            const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004"});
+            const result = await embeddingModel.embedContent({
+                content: { parts: [{ text: userQuery }] },
+                taskType: TaskType.RETRIEVAL_QUERY,
+            });
+            const queryVector = result.embedding.values;
+
+            const { data: documents } = await supabase.rpc('match_documents', {
+                query_embedding: queryVector,
+                match_threshold: 0.5, 
+                match_count: 3,       
+                filter_client_id: client.id
+            });
+
+            if (documents && documents.length > 0) {
+                contextText = documents.map(d => d.content).join("\n\n");
+                console.log("🧠 Knowledge Found:", contextText.substring(0, 50) + "...");
+            }
+        } catch (e) {
+            console.error("Vector Search Failed (continuing without context):", e);
+        }
+
+        // 3. COMBINE EVERYTHING INTO THE DYNAMIC PROMPT
+        // We take the global 'systemPrompt' (lines 145-167) and add the context and company name to it.
+        const dynamicSystemPrompt = `
+        You are a senior sales agent for "${client.company_name}".
+        
+        KNOWLEDGE BASE (CONTEXT FROM CLIENT DOCUMENTS):
+        "${contextText}"
+        
+        If the Knowledge Base has an answer, use it. If not, use your general knowledge.
+        
+        ${systemPrompt} 
+        `; 
+        // ^ We injected the 'systemPrompt' variable from the top of your file here.
 
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash", 
-            systemInstruction: systemPrompt,
+            systemInstruction: dynamicSystemPrompt, 
             generationConfig: { responseMimeType: "application/json" }
         });
 
+        // 4. PREPARE CHAT HISTORY
         const lastTurn = history.pop(); 
         const pastHistory = history;
         const chat = model.startChat({ history: pastHistory });
 
+        // 5. HANDLE IMAGES IN MESSAGE
         let currentParts = [];
         let foundImage = false;
         let sourceImageUrl = null;
@@ -207,12 +356,14 @@ app.post('/chat', async (req, res) => {
             currentParts.push({ text: "I have uploaded photos. Please analyze them." });
         }
 
+        // 6. GENERATE RESPONSE
         const result = await chat.sendMessage(currentParts);
         const cleanText = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
         const jsonResponse = JSON.parse(cleanText);
 
         // --- VISUALIZATION LOGIC ---
         if (jsonResponse.visualize === true) {
+            // If the AI wants to visualize but didn't just get an image, look back in history
             if (!sourceImageUrl) {
                  for (let i = pastHistory.length - 1; i >= 0; i--) {
                     const parts = pastHistory[i].parts;
@@ -240,6 +391,7 @@ app.post('/chat', async (req, res) => {
             }
         }
 
+        // 7. SAVE LEADS
         if (jsonResponse.lead_captured && (jsonResponse.customer_phone || jsonResponse.customer_email)) {
             await supabase.from('leads').insert({
                 client_id: client.id,

@@ -12,6 +12,8 @@
   "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@langchain/core": "^1.1.4",
+    "@langchain/google-genai": "^2.0.4",
     "@supabase/supabase-js": "^2.86.0",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
@@ -19,6 +21,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "form-data": "^4.0.5",
+    "langchain": "^1.1.5",
+    "pdf-parse": "^2.4.5",
     "sharp": "^0.34.5"
   }
 }
