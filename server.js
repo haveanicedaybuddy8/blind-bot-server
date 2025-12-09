@@ -10,7 +10,8 @@ import { createRequire } from 'module';
 import { TaskType } from "@google/generative-ai";
 
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
+const pdfLib = require('pdf-parse');
+const pdf = pdfLib.default || pdfLib;
 
 dotenv.config();
 const app = express();
