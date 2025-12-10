@@ -78,6 +78,32 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (request, 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+// 1. Host the "public" folder so index.html is accessible online
+app.use(express.static('public'));
+
+// 2. Update /init to return size settings
+app.get('/init', async (req, res) => {
+    const apiKey = req.query.apiKey;
+    if (!apiKey) return res.status(400).json({ error: "Missing API Key" });
+    
+    const { data: client } = await supabase
+        .from('clients')
+        .select('*') // Select ALL columns (including widget_width/height)
+        .eq('api_key', apiKey)
+        .single();
+        
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
+    res.json({
+        name: client.company_name, 
+        logo: client.logo_url || "", 
+        color: client.primary_color || "#007bff", 
+        title: client.bot_title || "Sales Assistant", 
+        // SEND THE DIMENSIONS
+        width: client.widget_width || "350px",
+        height: client.widget_height || "600px"
+    });
+});
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
