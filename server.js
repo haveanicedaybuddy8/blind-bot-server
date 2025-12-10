@@ -8,12 +8,73 @@ import FormData from 'form-data';
 import sharp from 'sharp'; 
 import { createRequire } from 'module'; 
 import { TaskType } from "@google/generative-ai";
+import Stripe from 'stripe';
 
 const require = createRequire(import.meta.url);
 const pdfLib = require('pdf-parse');
 const pdf = pdfLib.default || pdfLib;
 
 dotenv.config();
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+const app = express();
+
+// ==================================================================
+// 🛑 STRIPE WEBHOOK (MUST BE BEFORE app.use(express.json))
+// ==================================================================
+app.post('/webhook', express.raw({ type: 'application/json' }), async (request, response) => {
+  const sig = request.headers['stripe-signature'];
+  let event;
+
+  try {
+    // 1. Verify the message is actually from Stripe
+    event = stripe.webhooks.constructEvent(request.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error(`❌ Webhook Error: ${err.message}`);
+    return response.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // 2. Handle the "Payment Success" Event
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    
+    // Get the email of the person who paid
+    const userEmail = session.customer_details.email;
+    const amountPaid = session.amount_total; // e.g. 2000 cents = $20.00
+    
+    console.log(`💰 Payment received from: ${userEmail}`);
+
+    // 3. Update Supabase
+    // LOGIC: If they bought the "Credit Pack", give them 50 credits.
+    // (You can make this smarter later by checking session.metadata.productId)
+    
+    // Find the client by email
+    const { data: client } = await supabase
+        .from('clients')
+        .select('id, image_credits')
+        .eq('email', userEmail) // Make sure 'email' column exists in your clients table!
+        .single();
+
+    if (client) {
+        // Add 100 Credits 
+        const newBalance = (client.image_credits || 0) + 100;
+        
+        await supabase
+            .from('clients')
+            .update({ image_credits: newBalance })
+            .eq('id', client.id);
+            
+        console.log(`✅ Added credits to ${userEmail}. New Balance: ${newBalance}`);
+    } else {
+        console.error(`⚠️ Client with email ${userEmail} not found in database.`);
+    }
+  }
+
+  // Return a 200 response to acknowledge receipt of the event
+  response.send();
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
