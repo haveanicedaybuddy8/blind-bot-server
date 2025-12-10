@@ -147,13 +147,23 @@
     </div>
 
     <script>
+       
         // ============================================================
-        // 🛑 PASTE YOUR KEYS HERE 🛑
+        // 1. DYNAMIC CONFIGURATION (UPDATED)
         // ============================================================
-        const SERVER_URL = "https://blind-bot-server.onrender.com"; 
-        const CLIENT_API_KEY = "a5adece9-2893-495a-ae1a-1ef115145338"; // Matches your Supabase 'clients' table
+        
+        // Check if the URL has ?apiKey=... (Used for Softr Preview)
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlKey = urlParams.get('apiKey');
 
-        // Use the "ey..." key for SUPABASE_KEY
+        // If URL has a key, use it. If not, use your default Hardcoded Test Key.
+        const CLIENT_API_KEY = urlKey || "a5adece9-2893-495a-ae1a-1ef115145338"; 
+        
+        // Since the file is now hosted ON the server, we can use a relative path
+        // (Empty string means "Talk to the server that served this file")
+        const SERVER_URL = ""; 
+
+        // Use the "ey..." key for SUPABASE_KEY (Keep your existing one)
         const SUPABASE_URL = "https://iashgsuvdedpdmytdbgw.supabase.co"; 
         const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlhc2hnc3V2ZGVkcGRteXRkYmd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODMyNDIsImV4cCI6MjA4MDA1OTI0Mn0.nUyhba86frTJDqqAEfZnjF4s_5sTnda7TjIoKDo2wbc"; 
         // ============================================================
@@ -164,6 +174,43 @@
         let history = []; 
         let brandColor = "#007bff"; 
 
+        // 1. BOOT UP: Apply Branding & SIZE
+        async function initChat() {
+            try {
+                const response = await fetch(`${SERVER_URL}/init?apiKey=${CLIENT_API_KEY}`);
+                const data = await response.json();
+
+                if (data.error) return console.error("Config Error:", data.error);
+
+                // Apply Colors & Text
+                document.getElementById('brand-name').innerText = data.title;
+                brandColor = data.color;
+                document.getElementById('header').style.backgroundColor = brandColor;
+                document.getElementById('send-btn').style.backgroundColor = brandColor;
+                
+                // NEW: Apply Dynamic CSS for Bubbles
+                const style = document.createElement('style');
+                style.innerHTML = `.user { background-color: ${brandColor} !important; }`;
+                document.head.appendChild(style);
+
+                // NEW: Apply Logo
+                if (data.logo) {
+                    const img = document.getElementById('brand-logo');
+                    img.src = data.logo;
+                    img.style.display = 'block';
+                }
+
+                // NEW: Apply Custom Size (This makes the preview work!)
+                // If we are inside an iframe (Softr), we might want to fill 100% of the iframe
+                // But generally, we set the width on the container.
+                const container = document.getElementById('chat-container');
+                if (data.width) container.style.maxWidth = data.width;
+                // We keep height 100vh usually, but you can adjust if needed.
+
+            } catch (err) {
+                console.error("Init failed", err);
+            }
+        }
         // 1. BOOT UP: Apply Branding (FIXED)
         async function initChat() {
             try {
