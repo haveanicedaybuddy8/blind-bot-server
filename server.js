@@ -75,7 +75,6 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (request, 
   response.send();
 });
 
-const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 // 1. Host the "public" folder so index.html is accessible online
