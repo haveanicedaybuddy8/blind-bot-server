@@ -146,221 +146,175 @@
         </div>
     </div>
 
-    <script>
-       
-        // ============================================================
-        // 1. DYNAMIC CONFIGURATION (UPDATED)
-        // ============================================================
-        
-        // Check if the URL has ?apiKey=... (Used for Softr Preview)
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlKey = urlParams.get('apiKey');
+   <script>
+    // ============================================================
+    // 1. CONFIGURATION
+    // ============================================================
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlKey = urlParams.get('apiKey');
 
-        // If URL has a key, use it. If not, use your default Hardcoded Test Key.
-        const CLIENT_API_KEY = urlKey || "a5adece9-2893-495a-ae1a-1ef115145338"; 
-        
-        // Since the file is now hosted ON the server, we can use a relative path
-        // (Empty string means "Talk to the server that served this file")
-        const SERVER_URL = ""; 
+    // Use the URL key if present (Softr Preview), otherwise fallback to test key
+    const CLIENT_API_KEY = urlKey || "YOUR_FALLBACK_TEST_KEY"; 
+    
+    // Empty string means "Talk to the same server that hosted this file"
+    const SERVER_URL = ""; 
 
-        // Use the "ey..." key for SUPABASE_KEY (Keep your existing one)
-        const SUPABASE_URL = "https://iashgsuvdedpdmytdbgw.supabase.co"; 
-        const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlhc2hnc3V2ZGVkcGRteXRkYmd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODMyNDIsImV4cCI6MjA4MDA1OTI0Mn0.nUyhba86frTJDqqAEfZnjF4s_5sTnda7TjIoKDo2wbc"; 
-        // ============================================================
+    // Initialize Supabase
+    const SUPABASE_URL = "https://iashgsuvdedpdmytdbgw.supabase.co"; 
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlhc2hnc3V2ZGVkcGRteXRkYmd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODMyNDIsImV4cCI6MjA4MDA1OTI0Mn0.nUyhba86frTJDqqAEfZnjF4s_5sTnda7TjIoKDo2wbc"; 
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        // Initialize Supabase
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    let history = []; 
+    let brandColor = "#007bff"; 
 
-        let history = []; 
-        let brandColor = "#007bff"; 
+    // ============================================================
+    // 2. BOOT UP: Apply Branding & SIZE
+    // ============================================================
+    async function initChat() {
+        try {
+            const response = await fetch(`${SERVER_URL}/init?apiKey=${CLIENT_API_KEY}`);
+            const data = await response.json();
 
-        // 1. BOOT UP: Apply Branding & SIZE
-        async function initChat() {
-            try {
-                const response = await fetch(`${SERVER_URL}/init?apiKey=${CLIENT_API_KEY}`);
-                const data = await response.json();
+            if (data.error) return console.error("Config Error:", data.error);
 
-                if (data.error) return console.error("Config Error:", data.error);
+            // 1. Set Texts
+            document.getElementById('brand-name').innerText = data.title;
+            brandColor = data.color;
 
-                // Apply Colors & Text
-                document.getElementById('brand-name').innerText = data.title;
-                brandColor = data.color;
-                document.getElementById('header').style.backgroundColor = brandColor;
-                document.getElementById('send-btn').style.backgroundColor = brandColor;
-                
-                // NEW: Apply Dynamic CSS for Bubbles
-                const style = document.createElement('style');
-                style.innerHTML = `.user { background-color: ${brandColor} !important; }`;
-                document.head.appendChild(style);
+            // 2. Set Colors
+            document.getElementById('header').style.backgroundColor = brandColor;
+            document.getElementById('send-btn').style.backgroundColor = brandColor;
+            
+            // 3. Dynamic CSS for User Bubbles
+            const style = document.createElement('style');
+            style.innerHTML = `.user { background-color: ${brandColor} !important; }`;
+            document.head.appendChild(style);
 
-                // NEW: Apply Logo
-                if (data.logo) {
-                    const img = document.getElementById('brand-logo');
-                    img.src = data.logo;
-                    img.style.display = 'block';
-                }
-
-                // NEW: Apply Custom Size (This makes the preview work!)
-                // If we are inside an iframe (Softr), we might want to fill 100% of the iframe
-                // But generally, we set the width on the container.
-                const container = document.getElementById('chat-container');
-                if (data.width) container.style.maxWidth = data.width;
-                // We keep height 100vh usually, but you can adjust if needed.
-
-            } catch (err) {
-                console.error("Init failed", err);
+            // 4. Set Logo
+            if (data.logo) {
+                const img = document.getElementById('brand-logo');
+                img.src = data.logo;
+                img.style.display = 'block';
             }
+
+            // 5. CRITICAL: Set Size for iframe preview
+            // This ensures it looks like a phone app inside the Softr box
+            const container = document.getElementById('chat-container');
+            // If the server sends specific dimensions, use them, otherwise 100%
+            if (data.width) container.style.maxWidth = "100%"; 
+            
+        } catch (err) {
+            console.error("Init failed", err);
         }
-        // 1. BOOT UP: Apply Branding (FIXED)
-        async function initChat() {
-            try {
-                // Fetch settings from Server
-                const response = await fetch(`${SERVER_URL}/init?apiKey=${CLIENT_API_KEY}`);
-                const data = await response.json();
+    }
 
-                if (data.error) return console.error("Config Error:", data.error);
+    // ============================================================
+    // 3. IMAGE UPLOAD LOGIC
+    // ============================================================
+    async function uploadImage() {
+        const fileInput = document.getElementById('file-input');
+        const files = fileInput.files; 
+        if (files.length === 0) return;
 
-                // --- THIS IS THE FIX ---
-                // We ONLY apply settings here. We do NOT try to parse chat replies.
-                
-                // 1. Set Name
-                document.getElementById('brand-name').innerText = data.title;
-                brandColor = data.color;
+        document.getElementById('loader').style.display = 'block';
+        document.getElementById('loader').innerText = `Uploading ${files.length} photos...`;
 
-                // 2. Set Colors
-                document.getElementById('header').style.backgroundColor = brandColor;
-                document.getElementById('send-btn').style.backgroundColor = brandColor;
-                
-                // 3. Dynamic CSS for Bubbles
-                const style = document.createElement('style');
-                style.innerHTML = `.user { background-color: ${brandColor} !important; }`;
-                document.head.appendChild(style);
+        let messageParts = [];
+        let displayHTML = "";
 
-                // 4. Set Logo
-                if (data.logo) {
-                    const img = document.getElementById('brand-logo');
-                    img.src = data.logo;
-                    img.style.display = 'block';
-                }
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '');
+            const fileName = `uploads/${Date.now()}_${i}_${cleanName}`;
 
-            } catch (err) {
-                console.error("Init failed", err);
-            }
+            const { error } = await supabase.storage.from('chat-uploads').upload(fileName, file);
+
+            if (error) { console.error("Upload failed", error); continue; }
+
+            const { data: urlData } = supabase.storage.from('chat-uploads').getPublicUrl(fileName);
+            
+            displayHTML += `<img src="${urlData.publicUrl}" class="chat-img">`;
+            messageParts.push({ text: `[IMAGE_URL: ${urlData.publicUrl}]` });
         }
 
-        // 2. IMAGE UPLOAD LOGIC
-        async function uploadImage() {
-            const fileInput = document.getElementById('file-input');
-            const files = fileInput.files; 
-            if (files.length === 0) return;
+        document.getElementById('loader').style.display = 'none';
+        const box = document.getElementById('chat-box');
+        box.innerHTML += `<div class="user">${displayHTML}</div>`;
+        box.scrollTop = box.scrollHeight;
+        history.push({ role: "user", parts: messageParts });
+        triggerAIResponse(); 
+    }
 
-            document.getElementById('loader').style.display = 'block';
-            document.getElementById('loader').innerText = `Uploading ${files.length} photos...`;
+    // ============================================================
+    // 4. SEND MESSAGE LOGIC
+    // ============================================================
+    const msgInput = document.getElementById('msg');
+    
+    msgInput.addEventListener('input', function() {
+        this.style.height = 'auto'; 
+        this.style.height = (this.scrollHeight) + 'px'; 
+    });
 
-            let messageParts = [];
-            let displayHTML = "";
+    msgInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            send();
+        }
+    });
 
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '');
-                const fileName = `uploads/${Date.now()}_${i}_${cleanName}`;
+    async function send() {
+        const text = msgInput.value.trim();
+        if (!text) return;
 
-                const { error } = await supabase.storage
-                    .from('chat-uploads')
-                    .upload(fileName, file);
+        const box = document.getElementById('chat-box');
+        box.innerHTML += `<div class="user">${text.replace(/\n/g, "<br>")}</div>`;
+        msgInput.value = "";
+        msgInput.style.height = 'auto';
+        box.scrollTop = box.scrollHeight;
 
-                if (error) {
-                    console.error("Upload failed", error);
-                    continue;
-                }
+        history.push({ role: "user", parts: [{ text: text }] });
+        triggerAIResponse();
+    }
 
-                const { data: urlData } = supabase.storage
-                    .from('chat-uploads')
-                    .getPublicUrl(fileName);
-                
-                displayHTML += `<img src="${urlData.publicUrl}" class="chat-img">`;
-                messageParts.push({ text: `[IMAGE_URL: ${urlData.publicUrl}]` });
+    // ============================================================
+    // 5. AI CALL
+    // ============================================================
+    async function triggerAIResponse() {
+        const box = document.getElementById('chat-box');
+        try {
+            const response = await fetch(`${SERVER_URL}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ history: history, clientApiKey: CLIENT_API_KEY })
+            });
+            const data = await response.json();
+            
+            let rawReply = data.reply;
+            let renderHtml = "";
+
+            const renderMatch = rawReply.match(/\[RENDER_URL: (.*?)\]/);
+            if (renderMatch) {
+                const url = renderMatch[1];
+                rawReply = rawReply.replace(renderMatch[0], ""); 
+                renderHtml = `<div style="margin-top:10px; border:2px solid #28a745; border-radius:10px; overflow:hidden;">
+                    <div style="background:#28a745; color:white; padding:5px; font-size:12px; font-weight:bold;">✨ AI Preview</div>
+                    <img src="${url}" class="chat-img" style="border:none; margin:0;">
+                </div>`;
             }
 
-            document.getElementById('loader').style.display = 'none';
-
-            const box = document.getElementById('chat-box');
-            box.innerHTML += `<div class="user">${displayHTML}</div>`;
+            let reply = rawReply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+            box.innerHTML += `<div class="ai">${reply}${renderHtml}</div>`;
             box.scrollTop = box.scrollHeight;
+            history.push({ role: "model", parts: [{ text: data.reply }] });
 
-            history.push({ role: "user", parts: messageParts });
-
-            // Trigger AI Response
-            triggerAIResponse(); 
+        } catch (err) {
+            box.innerHTML += `<div class="ai" style="color:#d9534f">Connection Error</div>`;
         }
+    }
 
-        // 3. SEND MESSAGE LOGIC
-        const msgInput = document.getElementById('msg');
-        
-        msgInput.addEventListener('input', function() {
-            this.style.height = 'auto'; 
-            this.style.height = (this.scrollHeight) + 'px'; 
-        });
-
-        msgInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-            }
-        });
-
-        async function send() {
-            const text = msgInput.value.trim();
-            if (!text) return;
-
-            const box = document.getElementById('chat-box');
-            box.innerHTML += `<div class="user">${text.replace(/\n/g, "<br>")}</div>`;
-            msgInput.value = "";
-            msgInput.style.height = 'auto';
-            box.scrollTop = box.scrollHeight;
-
-            history.push({ role: "user", parts: [{ text: text }] });
-            triggerAIResponse();
-        }
-
-        // 4. COMMON AI CALL
-        async function triggerAIResponse() {
-            const box = document.getElementById('chat-box');
-            try {
-                const response = await fetch(`${SERVER_URL}/chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ history: history, clientApiKey: CLIENT_API_KEY })
-                });
-                const data = await response.json();
-                
-                let rawReply = data.reply;
-                let renderHtml = "";
-
-                // Check for Render URL
-                const renderMatch = rawReply.match(/\[RENDER_URL: (.*?)\]/);
-                if (renderMatch) {
-                    const url = renderMatch[1];
-                    rawReply = rawReply.replace(renderMatch[0], ""); 
-                    renderHtml = `<div style="margin-top:10px; border:2px solid #28a745; border-radius:10px; overflow:hidden;">
-                        <div style="background:#28a745; color:white; padding:5px; font-size:12px; font-weight:bold;">✨ AI Preview</div>
-                        <img src="${url}" class="chat-img" style="border:none; margin:0;">
-                    </div>`;
-                }
-
-                let reply = rawReply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
-                box.innerHTML += `<div class="ai">${reply}${renderHtml}</div>`;
-                box.scrollTop = box.scrollHeight;
-                history.push({ role: "model", parts: [{ text: data.reply }] });
-
-            } catch (err) {
-                box.innerHTML += `<div class="ai" style="color:#d9534f">Connection Error</div>`;
-            }
-        }
-
-        // Start
-        initChat();
-
-    </script>
+    // Start
+    initChat();
+</script>
 </body>
 </html>

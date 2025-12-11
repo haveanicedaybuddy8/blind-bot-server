@@ -394,9 +394,5 @@ app.post('/chat', async (req, res) => {
 });
 
 // Init Endpoint
-app.get('/init', async (req, res) => {
-    const { data: client } = await supabase.from('clients').select('*').eq('api_key', req.query.apiKey).single();
-    if (client) res.json({ name: client.company_name, logo: client.logo_url, color: client.primary_color, title: client.bot_title });
-});
 
 app.listen(3000, () => console.log('🚀 Smart-Resize Agent Running'));
