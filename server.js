@@ -165,52 +165,57 @@ async function smartResize(buffer) {
     return await sharp(buffer).resize(bestMatch.w, bestMatch.h, { fit: 'cover' }).toBuffer();
 }
 
-// --- UPDATED HELPER: GENERATE RENDERING (High Quality & Closed Blinds) ---
+// --- UPDATED HELPER: GENERATE RENDERING (Stable Image Ultra) ---
 async function generateRendering(imageUrl, stylePrompt) {
     try {
         console.log("🎨 Downloading original image...");
         const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
         let buffer = Buffer.from(imageResponse.data);
 
-        // USE SMART RESIZE HERE
+        // Resize is still recommended to save bandwidth and improve processing speed
         buffer = await smartResize(buffer);
 
-        console.log("🎨 Sending to Stability API (High Quality Mode)...");
+        console.log("💎 Sending to Stability API (Ultra Model)...");
         const payload = new FormData();
-        payload.append('init_image', buffer, { filename: 'source.jpg', contentType: 'image/jpeg' });
-        payload.append('init_image_mode', 'IMAGE_STRENGTH');
         
-        // 0.35 means "Keep 65% of the room structure, let AI change 35% (the texture/blinds)"
-        payload.append('image_strength', 0.35); 
+        // 1. IMAGE: The field name is now 'image', not 'init_image'
+        payload.append('image', buffer, 'source.jpg');
+        
+        // 2. STRENGTH: Controls how much the AI changes the photo.
+        // 0.0 = No change, 1.0 = Complete hallucination.
+        // 0.65 is optimal for keeping the room structure but ensuring the blinds actually appear.
+        payload.append('strength', 0.65); 
 
-        // POSITIVE PROMPT: Force "Fully Closed" and "High Quality"
+        // 3. POSITIVE PROMPT: Now a single string
         const fullPrompt = `${stylePrompt}, fully closed, covering the entire window, blinds lowered all the way down, privacy mode, interior design photography, 8k, highly detailed, architectural digest style, professional lighting`;
-        payload.append('text_prompts[0][text]', fullPrompt);
-        payload.append('text_prompts[0][weight]', 1);
+        payload.append('prompt', fullPrompt);
+        
+        // 4. NEGATIVE PROMPT: Now a separate field
+        payload.append('negative_prompt', 'distorted windows, blurry, low quality, cartoon, illustration, messy room, watermarks, open blinds, half open, raised blinds, view through window');
 
-        // NEGATIVE PROMPT: Explicitly forbid "Open" blinds
-        payload.append('text_prompts[1][text]', 'open blinds, half open, raised blinds, view through window, messy, blurry, distorted, low quality, watermark, text, crooked lines');
-        payload.append('text_prompts[1][weight]', -1);
+        // 5. FORMAT
+        payload.append('output_format', 'png');
 
-        payload.append('cfg_scale', 8); // Slightly higher adherence to the prompt
-        payload.append('steps', 50);    // Increased from 30 to 50 for sharper details
+        // NOTE: 'steps' and 'cfg_scale' are NOT supported in Ultra (it handles them automatically)
 
         const response = await axios.post(
-            'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image',
+            'https://api.stability.ai/v2beta/stable-image/generate/ultra',
             payload,
             {
                 headers: {
                     ...payload.getHeaders(),
-                    Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
-                    Accept: 'application/json',
+                    Authorization: `Bearer ${process.env.STABILITY_API_KEY}`, 
+                    Accept: 'application/json', // Critical: Tells API to return JSON with base64
                 },
             }
         );
 
-        console.log("🎨 Stability Success! Saving result...");
-        const base64Image = response.data.artifacts[0].base64;
+        console.log("💎 Ultra Success! Saving result...");
+        
+        // 6. PARSING: The new API returns { image: "base64string" } directly
+        const base64Image = response.data.image; 
         const imageBuffer = Buffer.from(base64Image, 'base64');
-        const fileName = `renderings/${Date.now()}_ai.png`;
+        const fileName = `renderings/${Date.now()}_ultra.png`;
 
         const { error } = await supabase.storage.from('chat-uploads').upload(fileName, imageBuffer, { contentType: 'image/png' });
         if (error) throw error;
@@ -220,6 +225,7 @@ async function generateRendering(imageUrl, stylePrompt) {
 
     } catch (error) {
         if (error.response) {
+            // Stability V2 error messages are usually in error.response.data.errors
             console.error("❌ Stability API Error:", error.response.status, JSON.stringify(error.response.data));
         } else {
             console.error("❌ Internal Rendering Error:", error.message);
