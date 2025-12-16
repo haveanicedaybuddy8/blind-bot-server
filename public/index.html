@@ -7,7 +7,26 @@
     
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: transparent; }
-        
+        .option-btn {
+    background: white;
+    border: 1px solid #333;
+    color: #333;
+    padding: 8px 12px;
+    border-radius: 20px;
+    margin: 5px 5px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.option-btn:hover {
+    background: #333;
+    color: white;
+}
+.options-container {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+}
         #chat-container { 
             background: white; 
             display: flex; 
@@ -203,7 +222,18 @@
             const container = document.getElementById('chat-container');
             // If the server sends specific dimensions, use them, otherwise 100%
             if (data.width) container.style.maxWidth = "100%"; 
-            
+            // ... inside initChat(), after data.width setting ...
+
+// 6. NEW: Auto-Greeting
+const greeting = `Hello! What can ${data.name} do for you today?`;
+
+// Only add if the chat box is empty
+const box = document.getElementById('chat-box');
+if (box.innerHTML.trim() === "") {
+    box.innerHTML += `<div class="ai">${greeting}</div>`;
+    // Add to history so the AI knows it already said hello
+    history.push({ role: "model", parts: [{ text: greeting }] });
+}
         } catch (err) {
             console.error("Init failed", err);
         }
@@ -289,7 +319,23 @@
                 body: JSON.stringify({ history: history, clientApiKey: CLIENT_API_KEY })
             });
             const data = await response.json();
+            // ... inside triggerAIResponse ...
             
+            let reply = rawReply.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+            
+            // NEW: Check for Buttons (Options)
+            let buttonsHtml = "";
+            if (data.options && Array.isArray(data.options) && data.options.length > 0) {
+                buttonsHtml = `<div class="options-container">`;
+                data.options.forEach(opt => {
+                    // When clicked, it sends the text of the button as a user message
+                    buttonsHtml += `<button class="option-btn" onclick="sendOption('${opt}')">${opt}</button>`;
+                });
+                buttonsHtml += `</div>`;
+            }
+
+            box.innerHTML += `<div class="ai">${reply}${renderHtml}${buttonsHtml}</div>`;
+            // ...
             let rawReply = data.reply;
             let renderHtml = "";
 
@@ -312,7 +358,11 @@
             box.innerHTML += `<div class="ai" style="color:#d9534f">Connection Error</div>`;
         }
     }
-
+function sendOption(text) {
+        const msgInput = document.getElementById('msg');
+        msgInput.value = text; // Put text in box
+        send(); // Auto send
+    }
     // Start
     initChat();
 </script>

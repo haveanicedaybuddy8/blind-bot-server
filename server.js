@@ -116,7 +116,8 @@ CRITICAL: You are a backend API. You DO NOT speak plain text. You ONLY speak JSO
 Every response must follow this EXACT structure:
 {
   "reply": "Your response text here",
-  "lead_captured": boolean, // Set true ONLY if you just got Name + (Phone OR Email)
+  "options": ["Option A", "Option B"], // NEW: Optional array of string buttons
+  "lead_captured": boolean, 
   "customer_name": "...", 
   "customer_phone": "...",
   "customer_email": "...",
@@ -124,8 +125,8 @@ Every response must follow this EXACT structure:
   "appointment_request": "...",
   "preferred_method": "...",
   "ai_summary": "...",
-  "visualize": boolean, // Set true if user asks to see/preview a product
-  "visual_style": "description for image generator" // e.g., "modern zebra shades in a living room"
+  "visualize": boolean, 
+  "visual_style": "description for image generator" 
 }
 
 VISION CAPABILITIES:
@@ -199,7 +200,7 @@ async function generateRendering(imageUrl, stylePrompt) {
         // NOTE: 'steps' and 'cfg_scale' are NOT supported in Ultra (it handles them automatically)
 
         const response = await axios.post(
-            'https://api.stability.ai/v2beta/stable-image/generate/ultra',
+            'https://api.stability.ai/v2beta/stable-image/generate/core',
             payload,
             {
                 headers: {
@@ -233,39 +234,25 @@ async function generateRendering(imageUrl, stylePrompt) {
         return null;
     }
 }
+async function generatePersonaFromText(companyName, text) {
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const prompt = `
+    Analyze the following sales training text for "${companyName}".
+    Create a "System Persona" for an AI sales agent.
+    The persona should describe the tone (e.g. professional, friendly, luxury), key selling points, and specific vocabulary to use.
+    Keep it under 200 words.
+
+    TEXT:
+    ${text.substring(0, 10000)} 
+    `;
+    const result = await model.generateContent(prompt);
+    return result.response.text();
+}
 
 async function createEmbedding(text) {
     const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004"});
     const result = await embeddingModel.embedContent({ content: { parts: [{ text }] }, taskType: TaskType.RETRIEVAL_DOCUMENT });
     return result.embedding.values;
-}
-
-// --- UPDATED HELPER: GENERATE PERSONA (Now with Fact Extraction) ---
-async function generatePersonaFromText(companyName, fullText) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const prompt = `
-    Analyze the following company training material for "${companyName}".
-    
-    TRAINING MATERIAL:
-    "${fullText.substring(0, 50000)}" 
-    
-    TASK: Write a SYSTEM PROMPT for an AI Sales Agent.
-    
-    CRITICAL INSTRUCTION: You must EXTRACT specific "Hard Facts" verbatim.
-    - If the text mentions a specific warranty (e.g., "Lifetime", "25 years"), YOU MUST INCLUDE IT.
-    - If the text mentions a price guarantee (e.g., "10x10", "Low Price Guarantee"), YOU MUST INCLUDE IT.
-    
-    STRUCTURE THE PERSONA AS FOLLOWS:
-    1. **Identity:** Who you are (Tone: Friendly, Local Expert).
-    2. **The "Hard Facts" (Scripture):** List the exact Warranties and Guarantees found in the text.
-    3. **Services:** What do they sell?
-    4. **Goal:** Answer questions using the "Hard Facts" first, then schedule an appointment.
-    
-    OUTPUT: A single block of text instructions for the AI.
-    `;
-    
-    const result = await model.generateContent(prompt);
-    return result.response.text();
 }
 
 // ==========================================
@@ -311,53 +298,59 @@ app.post('/train-agent', async (req, res) => {
 
 app.post('/chat', async (req, res) => {
     try {
+        console.log("📨 --- NEW CHAT REQUEST RECEIVED ---");
         const { history, clientApiKey } = req.body;
+        
+        // 1. Log Client Lookup
         const { data: client } = await supabase.from('clients').select('*').eq('api_key', clientApiKey).single();
-        if (!client) return res.json({ reply: "Service Suspended." });
+        if (!client) {
+            console.log("❌ Client Lookup Failed: API Key not found.");
+            return res.json({ reply: "Service Suspended." });
+        }
+        console.log(`✅ Client Verified: ${client.email} | Credits: ${client.image_credits}`);
 
-        // 1. RAG Search
-        const lastTurn = history[history.length - 1];
-        const userQuery = lastTurn.parts.map(p => p.text).join(' ');
-        let contextText = "";
-        try {
-            const queryVector = await createEmbedding(userQuery);
-            const { data: documents } = await supabase.rpc('match_documents', {
-                query_embedding: queryVector, match_threshold: 0.5, match_count: 3, filter_client_id: client.id
-            });
-            if (documents) contextText = documents.map(d => d.content).join("\n\n");
-        } catch (e) {}
-
-        // 2. Load Dynamic Persona (Fall back to generic if missing)
+        // 2. Load Dynamic Persona & Products
         const agentPersona = client.bot_persona || `You are a helpful sales assistant for ${client.company_name}.`;
+        let productConfig = client.product_config;
+        if (!productConfig || !Array.isArray(productConfig)) {
+            productConfig = [
+                { name: "Zebra Blinds", ai_prompt: "modern dual-layered fabric..." },
+                { name: "Roller Shades", ai_prompt: "sleek flat fabric shade..." }
+            ];
+        }
+        const productNames = productConfig.map(p => p.name).join(", ");
 
-        // 3. Construct Final Prompt
+        // 3. Construct Prompt
         const finalSystemPrompt = `
         ${TECHNICAL_RULES}
-
         YOUR PERSONALITY & KNOWLEDGE:
         ${agentPersona}
-
-        SPECIFIC KNOWLEDGE FOR THIS QUESTION:
-        ${contextText}
-
+        PRODUCTS WE SELL:
+        ${productNames}
+        VISUALIZATION RULES:
+        - If the user asks to see a specific product, you must set "visual_style" to the description in: ${JSON.stringify(productConfig)}
+        - If the user provides an image, assume they want to visualize it.
         INSTRUCTION:
-        - If the "SPECIFIC KNOWLEDGE" has the answer, USE IT.
-        - If not, rely on your "YOUR PERSONALITY" to be helpful.
-        - Always pivot to scheduling a home visit after answering.
+        - Use the "options" array for product choices.
         `;
 
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", systemInstruction: finalSystemPrompt, generationConfig: { responseMimeType: "application/json" } });
         
-        // 4. Chat Logic (Images & History)
+        // 4. Chat Logic & Image Extraction
         const pastHistory = history.slice(0, -1);
         const chat = model.startChat({ history: pastHistory });
+        const lastTurn = history[history.length - 1];
         
         let currentParts = [];
         let sourceImageUrl = null;
+        
+        console.log("🔍 Analyzing User Input...");
         for (const part of lastTurn.parts) {
+            console.log(`   -> Input Part: ${part.text.substring(0, 50)}...`); // Log first 50 chars
             const imgMatch = part.text.match(/\[IMAGE_URL: (.*?)\]/);
             if (imgMatch) {
                 sourceImageUrl = imgMatch[1];
+                console.log(`   📸 FOUND IMAGE URL: ${sourceImageUrl}`);
                 const imagePart = await urlToGenerativePart(sourceImageUrl);
                 if (imagePart) currentParts.push(imagePart);
             } else {
@@ -368,33 +361,57 @@ app.post('/chat', async (req, res) => {
 
         const result = await chat.sendMessage(currentParts);
         const jsonResponse = JSON.parse(result.response.text());
+        
+        console.log("🤖 Gemini Response Decision:", {
+            visualize: jsonResponse.visualize,
+            visual_style: jsonResponse.visual_style ? "Style Present" : "Missing"
+        });
 
         // 5. Visualization Handling
-        if (jsonResponse.visualize === true) {
-             // ... (Keep your credit check & image generation logic here)
-             // (Re-paste the logic from previous steps if needed, or I can provide it)
-             // For brevity, assuming you paste the visualization block here:
-             if (sourceImageUrl) {
-                 const renderedUrl = await generateRendering(sourceImageUrl, jsonResponse.visual_style);
-                 if (renderedUrl) jsonResponse.reply += `\n\n[RENDER_URL: ${renderedUrl}]`;
+        if (jsonResponse.visualize === true) {             
+             // A. Check Credits
+             if (client.image_credits <= 0) {
+                 console.log("⛔ Visualization blocked: No credits.");
+                 jsonResponse.reply += "\n\n(System Note: Out of visualization credits.)";
+             } 
+             // B. Generate Image
+             else if (sourceImageUrl) {
+                 console.log("🚀 Starting Image Generation...");
+                 try {
+                     // SWITCHED TO CORE MODEL FOR RELIABILITY
+                     // Make sure to use 'core' if 'ultra' is failing silently
+                     const renderedUrl = await generateRendering(sourceImageUrl, jsonResponse.visual_style);
+                     
+                     if (renderedUrl) {
+                         console.log("✨ Generation Success:", renderedUrl);
+                         jsonResponse.reply += `\n\n[RENDER_URL: ${renderedUrl}]`;
+                         await supabase.rpc('decrement_credits', { row_id: client.id, count: 1 });
+                     } else {
+                         console.log("❌ Generation Failed: renderedUrl was null.");
+                         jsonResponse.reply += "\n\n(Server busy, please try again.)";
+                     }
+                 } catch (err) {
+                     console.error("❌ Render Error Exception:", err);
+                 }
+             } else {
+                 console.log("⚠️ Gemini wanted to visualize, but NO SOURCE IMAGE was found.");
              }
         }
-        
-        // 6. Lead Saving (Keep existing logic)
+
+        // 6. Lead Capture
          if (jsonResponse.lead_captured) {
             await supabase.from('leads').insert({
                 client_id: client.id,
                 customer_name: jsonResponse.customer_name,
-                customer_phone: jsonResponse.customer_phone,
                 customer_email: jsonResponse.customer_email,
                 ai_summary: jsonResponse.ai_summary
             });
         }
 
-        res.json({ reply: jsonResponse.reply });
+        res.json({ reply: jsonResponse.reply, options: jsonResponse.options });
 
     } catch (err) {
-        console.error(err);
+        console.error("🔥 CRITICAL SERVER ERROR:", err);
         res.status(500).json({ reply: "Connection Error." });
     }
 });
