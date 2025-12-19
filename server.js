@@ -35,16 +35,14 @@ async function urlToGenerativePart(url) {
                 mimeType: "image/jpeg"
             }
         };
-    } catch (e) { return null; }
-}
-
-async function smartResize(buffer) {
-    // (Keep your existing smartResize logic here - omitted for brevity, copy from previous file)
-    // ... [Copy existing smartResize code] ...
-    return await sharp(buffer).resize(1024, 1024, { fit: 'cover' }).toBuffer(); // Simplified for example
+    } catch (e) { 
+        console.error("❌ Failed to download image for AI analysis:", e.message);
+        return null; 
+    }
 }
 
 async function generateRendering(sourceImageUrl, promptText) {
+    // (Your existing visualization logic - unchanged)
     try {
         console.log("🎨 Downloading customer room image...");
         const imageResponse = await axios.get(sourceImageUrl, { responseType: 'arraybuffer' });
@@ -55,7 +53,6 @@ async function generateRendering(sourceImageUrl, promptText) {
         payload.append('image', buffer, 'source.jpg');
         payload.append('strength', 0.65); 
         
-        // COMBINED PROMPT: Owner Desc + AI Summary + Standard Quality Tags
         const fullPrompt = `${promptText}, fully closed, covering window, interior design photography, 8k, professional lighting`;
         
         payload.append('prompt', fullPrompt);
@@ -81,45 +78,63 @@ async function generateRendering(sourceImageUrl, promptText) {
 }
 
 // ==================================================================
-// 2. NEW ENDPOINT: UPLOAD PRODUCT TO GALLERY
+// 2. NEW: AUTOMATIC BACKGROUND FIXER
 // ==================================================================
-app.post('/add-product', async (req, res) => {
+// This runs every 30 seconds to fix NULL descriptions
+async function checkAndFixDescriptions() {
     try {
-        const { clientApiKey, name, description, imageUrl } = req.body;
-
-        // 1. Verify Client
-        const { data: client } = await supabase.from('clients').select('id').eq('api_key', clientApiKey).single();
-        if (!client) return res.status(401).json({ error: "Invalid API Key" });
-
-        // 2. Generate AI Description of the Product Image
-        console.log(`🤖 Generating AI description for ${name}...`);
-        const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const imagePart = await urlToGenerativePart(imageUrl);
-        
-        const prompt = "Describe the window treatment in this image in detail. Focus on the texture, material, light filtering properties, and style. Keep it under 30 words.";
-        const result = await visionModel.generateContent([prompt, imagePart]);
-        const aiDescription = result.response.text();
-
-        // 3. Save to Database
-        const { error } = await supabase.from('product_gallery').insert({
-            client_id: client.id,
-            name: name,
-            description: description, // Owner's Manual Description
-            ai_description: aiDescription, // AI's Visual Analysis
-            image_url: imageUrl
-        });
+        // 1. Find products where ai_description is NULL
+        const { data: products, error } = await supabase
+            .from('product_gallery')
+            .select('*')
+            .is('ai_description', null)
+            .not('image_url', 'is', null); // Ensure image exists
 
         if (error) throw error;
-        res.json({ success: true, ai_description: aiDescription });
 
+        if (products && products.length > 0) {
+            console.log(`🧹 Found ${products.length} products missing AI descriptions. Fixing...`);
+
+            const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            for (const product of products) {
+                console.log(`   -> Generating description for: ${product.name}`);
+                
+                const imagePart = await urlToGenerativePart(product.image_url);
+                
+                if (imagePart) {
+                    const prompt = "Describe the window treatment in this image specifically for an AI image generator. Focus on texture, color, material, style (e.g. zebra, roller), and light filtering. Keep it under 20 words.";
+                    
+                    try {
+                        const result = await visionModel.generateContent([prompt, imagePart]);
+                        const aiDesc = result.response.text();
+
+                        // Update the database
+                        await supabase
+                            .from('product_gallery')
+                            .update({ ai_description: aiDesc })
+                            .eq('id', product.id);
+                            
+                        console.log(`      ✅ Fixed!`);
+                    } catch (aiErr) {
+                        console.error(`      ❌ AI Generation Failed for ${product.name}:`, aiErr.message);
+                    }
+                }
+            }
+        }
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to add product" });
+        console.error("Background Worker Error:", err.message);
     }
-});
+}
+
+// Start the timer (Run every 30 seconds)
+setInterval(checkAndFixDescriptions, 30000);
+// Run once immediately on startup
+checkAndFixDescriptions();
+
 
 // ==================================================================
-// 3. CHAT ENDPOINT
+// 3. CHAT ENDPOINT (Unchanged)
 // ==================================================================
 app.post('/chat', async (req, res) => {
     try {
@@ -128,7 +143,6 @@ app.post('/chat', async (req, res) => {
         const { data: client } = await supabase.from('clients').select('*').eq('api_key', clientApiKey).single();
         if (!client) return res.json({ reply: "Service Suspended." });
 
-        // A. FETCH PRODUCTS FROM NEW GALLERY TABLE
         const { data: products } = await supabase
             .from('product_gallery')
             .select('name, description, ai_description, image_url')
@@ -136,7 +150,6 @@ app.post('/chat', async (req, res) => {
 
         const productNames = products ? products.map(p => p.name).join(", ") : "Standard Blinds";
         
-        // B. SYSTEM PROMPT
         const finalSystemPrompt = `
         CRITICAL: You DO NOT speak plain text. You ONLY speak JSON.
         Structure:
@@ -167,17 +180,43 @@ app.post('/chat', async (req, res) => {
         let currentParts = [];
         let sourceImageUrl = null;
         
+        // --- OBJECTIVE FIX: LOOK BACK FOR IMAGE IF NOT IN LAST TURN ---
         for (const part of lastTurn.parts) {
             const imgMatch = part.text.match(/\[IMAGE_URL: (.*?)\]/);
             if (imgMatch) sourceImageUrl = imgMatch[1];
-            currentParts.push(part);
         }
 
-        // D. Gemini Response
+        if (!sourceImageUrl && history.length > 1) {
+            for (let i = history.length - 2; i >= 0; i--) {
+                const turn = history[i];
+                if (turn.role === 'user') {
+                    for (const part of turn.parts) {
+                        const imgMatch = part.text.match(/\[IMAGE_URL: (.*?)\]/);
+                        if (imgMatch) {
+                            sourceImageUrl = imgMatch[1];
+                            break;
+                        }
+                    }
+                }
+                if (sourceImageUrl) break;
+            }
+        }
+        // -------------------------------------------------------------
+
+        for (const part of lastTurn.parts) {
+             if (!part.text.includes('[IMAGE_URL:')) {
+                  currentParts.push({ text: part.text });
+             }
+        }
+        if (sourceImageUrl) {
+             const imagePart = await urlToGenerativePart(sourceImageUrl);
+             if (imagePart) currentParts.push(imagePart);
+             currentParts.push({ text: "Analyze this image context." });
+        }
+
         const result = await chat.sendMessage(currentParts);
         const jsonResponse = JSON.parse(result.response.text());
 
-        // E. Inject Images into Suggestions
         if (jsonResponse.product_suggestions && products) {
             jsonResponse.product_suggestions = products.map(p => ({
                 name: p.name,
@@ -185,15 +224,13 @@ app.post('/chat', async (req, res) => {
             }));
         }
 
-        // F. Handle Visualization
         if (jsonResponse.visualize && jsonResponse.selected_product_name && sourceImageUrl) {
-            // FIND THE PRODUCT IN DB
             const selectedProduct = products.find(p => p.name.toLowerCase() === jsonResponse.selected_product_name.toLowerCase());
             
             if (selectedProduct) {
-                // *** THE MAGIC PROMPT FORMULA ***
-                // Owner's Description + AI's Description
-                const combinedPrompt = `${selectedProduct.description}. ${selectedProduct.ai_description}`;
+                // FALLBACK: If AI description is still null (script hasn't run yet), use plain description
+                const desc = selectedProduct.ai_description || selectedProduct.description;
+                const combinedPrompt = `${selectedProduct.description}. ${desc}`;
                 
                 console.log(`🎨 Generating with prompt: ${combinedPrompt}`);
                 
