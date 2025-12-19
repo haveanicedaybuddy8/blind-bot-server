@@ -170,7 +170,7 @@ app.post('/chat', async (req, res) => {
         2. If user selects a product (e.g. "I want Zebra Blinds") -> Set "visualize": true, and set "selected_product_name" to the exact name.
         `;
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash", systemInstruction: finalSystemPrompt, generationConfig: { responseMimeType: "application/json" } });
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash", systemInstruction: finalSystemPrompt, generationConfig: { responseMimeType: "application/json" } });
         
         // C. Parse History for Image
         const pastHistory = history.slice(0, -1);
