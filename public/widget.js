@@ -30,7 +30,7 @@
     
     // Load your Chatbot HTML
     const iframe = document.createElement('iframe');
-    iframe.src = `https://blind-bot-server.onrender.com/index.html?apiKey=${apiKey}`;
+    iframe.src = `https://blind-bot-server.onrender.com/chat.html?apiKey=${apiKey}`;
     iframe.style.width = '100%';
     iframe.style.height = '100%';
     iframe.style.border = 'none';
