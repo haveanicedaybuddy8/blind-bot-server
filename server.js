@@ -95,7 +95,7 @@ async function checkAndFixDescriptions() {
         if (products && products.length > 0) {
             console.log(`🧹 Found ${products.length} products missing AI descriptions. Fixing...`);
 
-            const visionModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const visionModel = genAI.getGenerativeModel({ model: "gemini-3-flash" });
 
             for (const product of products) {
                 console.log(`   -> Generating description for: ${product.name}`);
@@ -170,7 +170,7 @@ app.post('/chat', async (req, res) => {
         2. If user selects a product (e.g. "I want Zebra Blinds") -> Set "visualize": true, and set "selected_product_name" to the exact name.
         `;
 
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", systemInstruction: finalSystemPrompt, generationConfig: { responseMimeType: "application/json" } });
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash", systemInstruction: finalSystemPrompt, generationConfig: { responseMimeType: "application/json" } });
         
         // C. Parse History for Image
         const pastHistory = history.slice(0, -1);
