@@ -5,8 +5,16 @@ import axios from 'axios';
 import { createRequire } from 'module'; 
 
 const require = createRequire(import.meta.url);
-// ⚠️ Ensure you ran: npm install pdf-parse
 const pdfParse = require('pdf-parse'); 
+
+// 🔍 DEBUGGING LINES (Add these temporarily)
+console.log("------------------------------------------------");
+console.log("DEBUGGING PDF PARSE:");
+console.log("Type of pdfParse:", typeof pdfParse);
+console.log("Is it a function?", typeof pdfParse === 'function');
+console.log("Structure:", pdfParse);
+console.log("Does it have .default?", pdfParse.default);
+console.log("------------------------------------------------");
 
 dotenv.config();
 
