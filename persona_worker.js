@@ -5,7 +5,8 @@ import axios from 'axios';
 import { createRequire } from 'module'; 
 
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse'); // ✅ Simplified import
+// ⚠️ Ensure you ran: npm install pdf-parse
+const pdfParse = require('pdf-parse'); 
 
 dotenv.config();
 
@@ -16,29 +17,24 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 async function extractContentFromUrl(url) {
     if (!url) return null;
     try {
-        // ✅ Fix: Handle spaces in filenames (e.g. "home screen.pdf")
+        // Fix spaces in filenames (e.g. "home screen.pdf" -> "home%20screen.pdf")
         const safeUrl = encodeURI(url);
         
-        console.log(`      📂 Downloading PDF: ${safeUrl}`);
+        console.log(`      📂 Downloading: ${safeUrl}`);
         const response = await axios.get(safeUrl, { responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data);
         
-        // 1. If PDF -> Extract Text
         if (url.toLowerCase().includes('.pdf')) {
-            // Safety Check: Ensure it's actually a PDF buffer
+            // Check if it's a real PDF file header
             if (buffer.lastIndexOf("%PDF-", 0) === 0) {
                  const data = await pdfParse(buffer);
-                 return data.text.substring(0, 30000); // Limit text length
+                 return data.text.substring(0, 30000); 
             } else {
-                 console.log("      ⚠️ Warning: File extension is .pdf but content is not.");
+                 console.log("      ⚠️ File extension is .pdf but content is not (likely an image/error).");
                  return null;
             }
-        } 
-        // 2. If Image -> Prepare for Vision Model
-        else {
-             // For images, we skip text parsing and return a placeholder 
-             // (or you can add Vision logic here if you want image analysis)
-            return "[Image Content Not Parsed in this version]";
+        } else {
+            return "[Image Content Not Parsed]";
         }
     } catch (e) {
         console.error("      ❌ File parsing failed:", e.message);
@@ -48,11 +44,14 @@ async function extractContentFromUrl(url) {
 
 // --- MAIN WORKER ---
 export async function startPersonaWorker() {
-    console.log("👷 Persona Worker: Watching 'training_pdf' and 'sales_prompt_override'...");
+    console.log("👷 Persona Worker: Started. Watching for empty 'bot_persona' fields...");
 
     setInterval(async () => {
         try {
-            // 1. Find clients who need a Persona update
+            // Heartbeat log so you know it's alive (optional, remove later if noisy)
+            // console.log("...Heartbeat: Checking DB for updates...");
+
+            // 1. Find clients who HAVE inputs but NO Persona yet
             const { data: clients, error } = await supabase
                 .from('clients')
                 .select('*')
@@ -66,49 +65,40 @@ export async function startPersonaWorker() {
                 for (const client of clients) {
                     console.log(`   -> Processing: ${client.company_name}`);
                     
-                    // A. Get PDF Content (if it exists)
                     let pdfContent = "No Training Document provided.";
                     if (client.training_pdf) {
                         const extracted = await extractContentFromUrl(client.training_pdf);
                         if (extracted) pdfContent = extracted;
                     }
 
-                    // B. Get Override Instructions (if it exists)
                     const override = client.sales_prompt_override || "No specific owner instructions.";
 
-                    // C. Build the Prompt for the AI Architect
                     const systemPrompt = `
                     You are an expert AI Sales System Architect.
                     
                     YOUR GOAL: 
-                    Write a single, highly effective "System Instruction" block for a Sales Chatbot.
-                    This instruction block will be fed into the chatbot later to tell it how to behave.
+                    Write a "System Instruction" block for a Sales Chatbot.
                     
                     INPUT DATA:
                     1. OWNER INSTRUCTIONS (High Priority): "${override}"
-                    2. COMPANY DOCUMENTS (Background Info): "${pdfContent}"
+                    2. COMPANY DOCUMENTS: "${pdfContent}"
 
-                    CRITICAL RULES FOR THE OUTPUT:
-                    - IGNORE visual descriptions in the PDF (logos, layout).
-                    - EXTRACT Policy, Discounts, Hours, and Contact Info from the PDF.
-                    - If the Owner Instructions contradict the PDF, the Owner Instructions WIN.
-                    - The output must be written in the second person ("You are the sales assistant for...").
-                    - Keep it concise (under 300 words) but include all hard facts.
-                    
-                    GENERATE THE SYSTEM INSTRUCTION NOW:
+                    RULES:
+                    - IGNORE visual descriptions (logos, layout).
+                    - EXTRACT Policy, Discounts, Hours, and Contact Info.
+                    - IF Owner Instructions contradict PDF, Owner Instructions WIN.
+                    - Output format: "You are the sales assistant for [Company]..."
                     `;
 
-                    // D. Generate the Persona
                     const result = await model.generateContent(systemPrompt);
                     const generatedPersona = result.response.text();
 
-                    // E. Save to Supabase
                     await supabase
                         .from('clients')
                         .update({ bot_persona: generatedPersona })
                         .eq('id', client.id);
 
-                    console.log(`      ✅ Persona Saved!`);
+                    console.log(`      ✅ Persona Saved for ${client.company_name}!`);
                 }
             }
         } catch (err) {
