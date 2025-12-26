@@ -156,7 +156,7 @@ app.post('/chat', async (req, res) => {
 
         1. MANDATORY GREETING:
            If this is the first message in the conversation history, your response MUST be exactly:
-           "What can ${companyName} do for you today?"
+           "What can ${company_name} do for you today?"
 
         2. UNAVAILABLE PRODUCTS:
            If the user asks for a product NOT in the "AVAILABLE PRODUCTS" list (e.g., they ask for shutters but you only have rollers), you MUST reply:
