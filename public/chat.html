@@ -81,27 +81,35 @@
     const urlParams = new URLSearchParams(window.location.search);
     const CLIENT_API_KEY = urlParams.get('apiKey') || "YOUR_FALLBACK_TEST_KEY"; 
     const SERVER_URL = "https://blind-bot-server.onrender.com"; 
+    
+    // Initialize Supabase (Keep your existing keys)
     const supabaseclients = window.supabase.createClient("https://iashgsuvdedpdmytdbgw.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlhc2hnc3V2ZGVkcGRteXRkYmd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODMyNDIsImV4cCI6MjA4MDA1OTI0Mn0.nUyhba86frTJDqqAEfZnjF4s_5sTnda7TjIoKDo2wbc");
 
-    let history = []; 
+    // --- 1. CAPTURE COMPANY NAME ---
+    // This grabs the name passed from widget.js
+    const companyName = urlParams.get('name') || "us";
+    const initialGreeting = `What can ${companyName} do for you today?`;
+
+    // --- 2. INITIALIZE HISTORY WITH GREETING ---
+    // We "fake" that the AI already said this, so the server knows the conversation has started.
+    let history = [
+        { role: "model", parts: [{ text: initialGreeting }] }
+    ]; 
+    
     let stagedImages = []; 
         
-    // --- UPDATED: THEME & LOGO LOGIC ---
+    // --- 3. THEME & LOGO LOGIC ---
     const themeColor = urlParams.get('theme') || "#333";
-    const logoUrl = urlParams.get('logo'); // Get the logo URL
+    const logoUrl = urlParams.get('logo'); 
 
-    // 1. Apply Color
     const header = document.getElementById('header');
     header.style.backgroundColor = themeColor;
     document.getElementById('send-btn').style.backgroundColor = themeColor;
     
-    // 2. Apply Logo (If it exists)
     if (logoUrl && logoUrl !== "null" && logoUrl !== "") {
-        // Clear text and add image
         header.innerHTML = `<img src="${logoUrl}" style="height: 30px; vertical-align: middle;">`;
     }
 
-    // 3. Dynamic CSS
     const styleSheet = document.createElement("style");
     styleSheet.innerText = `
         .user { background: ${themeColor} !important; }
@@ -109,7 +117,14 @@
     `;
     document.head.appendChild(styleSheet);
 
-    // Upload Logic (Keep your previous uploadImage logic here)
+    // --- 4. SHOW GREETING IMMEDIATELY ---
+    window.onload = function() {
+        const box = document.getElementById('chat-box');
+        // Instantly add the greeting bubble to the UI
+        box.innerHTML += `<div class="ai">${initialGreeting}</div>`;
+    };
+
+    // --- 5. UPLOAD LOGIC ---
     async function uploadImage() {
         const fileInput = document.getElementById('file-input');
         const file = fileInput.files[0];
@@ -125,7 +140,7 @@
         document.getElementById('loader').style.display = 'none';
     }
 
-    // Send Logic
+    // --- 6. SEND LOGIC ---
     async function send(overrideText = null) {
         const text = overrideText || document.getElementById('msg').value.trim();
         if (!text && stagedImages.length === 0) return;
@@ -143,7 +158,7 @@
         history.push({ role: "user", parts: [{ text: backendText }] });
 
         document.getElementById('msg').value = "";
-        stagedImages = []; // Clear staged after sending
+        stagedImages = []; 
         document.getElementById('preview-container').innerHTML = "";
         
         triggerAIResponse();
@@ -163,17 +178,14 @@
             const data = await response.json();
             document.getElementById('temp-loader').remove();
 
-            // 1. Text Reply
             let replyHtml = data.reply.replace(/\[RENDER_URL: (.*?)\]/, (match, url) => {
                 return `<img src="${url}" class="chat-img" style="border: 2px solid #28a745;">`;
             });
             
-            // 2. PRODUCT CARDS (NEW)
             let cardsHtml = "";
             if (data.product_suggestions && data.product_suggestions.length > 0) {
                 cardsHtml = `<div class="product-grid">`;
                 data.product_suggestions.forEach(prod => {
-                    // Click sends the product name as a message
                     cardsHtml += `
                     <div class="product-card" onclick="send('${prod.name}')">
                         <img src="${prod.image}">
@@ -191,6 +203,6 @@
             console.error(err);
         }
     }
-   </script>
+</script>
 </body>
 </html>
