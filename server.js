@@ -155,15 +155,24 @@ app.post('/chat', async (req, res) => {
 
         BEHAVIOR RULES:
 
-        1. MANDATORY GREETING:
-           If this is the first message in the conversation history, your response MUST be exactly:
-           "What can ${client.company_name} do for you today?"
+        1. SALES GOAL (HIGH PRIORITY):
+           - Your ultimate goal is to BOOK AN IN-HOME CONSULTATION.
+           - Once the user shows interest or has seen a visualization, you MUST pivot to asking for contact details.
+           - Key phrase to work towards: "I can have a designer bring these samples to your home. What is your Name and Phone Number to schedule a visit?"
+           - If they ask for price, give a rough idea but say "Exact price depends on measurements. Can we stop by to measure?"
+        
+        2. WHEN TO SHOW PRODUCT MENU (product_suggestions):
+           - DEFAULT: Keep "product_suggestions": [] (Empty Array). Do NOT show the menu for general chat, greetings, or when asking for contact info.
+           - SHOW ONLY IF:
+             A) The user explicitly asks to see options (e.g. "What styles do you have?", "Show me blinds").
+             B) The user has uploaded an image but has NOT selected a product style yet (e.g. "Here is my room, what do you suggest?").
+           - TO TRIGGER MENU: Return "product_suggestions": [{ "name": "trigger" }] in your JSON. The system will fill the real data.
 
-        2. UNAVAILABLE PRODUCTS:
+        3. UNAVAILABLE PRODUCTS:
            If the user asks for a product NOT in the "AVAILABLE PRODUCTS" list (e.g., they ask for shutters but you only have rollers), you MUST reply:
            "Unfortunately we don't offer that option right now."
 
-        3. VISUALIZATION LOGIC (The 2-Step Requirement):
+        4. VISUALIZATION LOGIC (The 2-Step Requirement):
            You can ONLY set "visualize": true if you have BOTH: (A) A User Uploaded Image in history, AND (B) A specific product selection.
 
            CASE A: User uploads an image but has NOT selected a product yet.
@@ -236,12 +245,14 @@ app.post('/chat', async (req, res) => {
 
         const result = await chat.sendMessage(currentParts);
         const jsonResponse = JSON.parse(result.response.text());
-
-        if (jsonResponse.product_suggestions && products) {
+        
+        if (jsonResponse.product_suggestions && jsonResponse.product_suggestions.length > 0 && products) {
             jsonResponse.product_suggestions = products.map(p => ({
                 name: p.name,
                 image: p.image_url
             }));
+        } else {
+            jsonResponse.product_suggestions = [];
         }
 
         if (jsonResponse.visualize && jsonResponse.selected_product_name && sourceImageUrl) {

@@ -124,6 +124,14 @@
         const box = document.getElementById('chat-box');
         // Instantly add the greeting bubble to the UI
         box.innerHTML += `<div class="ai">${initialGreeting}</div>`;
+        const msgInput = document.getElementById('msg');
+        msgInput.addEventListener('keydown', function(e) {
+            // If Enter is pressed WITHOUT Shift
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); // Stop the new line from happening
+                send(); // Trigger the send function
+            }
+        });
     };
 
     // --- 5. UPLOAD LOGIC ---
