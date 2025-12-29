@@ -1,55 +1,41 @@
-// subscription_manager.js
+// Import the new trigger function
+import { triggerAutoRefill } from './stripe_handler.js'; 
 
-/**
-// subscription_manager.js
-
-/**
- * Validates if a client has access to the service.
- * NEW Logic:
- * 1. Validates API Key.
- * 2. STRICTLY REQUIRES 'status' to be 'active'.
- * 3. STRICTLY REQUIRES 'credits' > 0.
- * 4. Deducts 1 credit on every successful request.
- */
 export async function validateClientAccess(supabase, apiKey) {
     try {
-        // 1. Fetch Client Identity & Balance
+        // ... (Keep existing fetch logic) ...
         const { data: client, error } = await supabase
             .from('clients')
             .select('*') 
             .eq('api_key', apiKey)
             .single();
 
-        if (error || !client) {
-            return { allowed: false, error: "Invalid API Key or Client not found." };
+        if (error || !client) return { allowed: false, error: "Invalid Key" };
+
+        if (client.status !== 'active') return { allowed: false, error: "Inactive" };
+        if (!client.image_credits || client.image_credits <= 0) return { allowed: false, error: "No Credits" };
+
+        // --- CALCULATE NEW BALANCE ---
+        const newBalance = client.image_credits - 1;
+
+        // --- THE TRIGGER LOGIC ---
+        // If balance hits 5, AND auto-replenish is ON, AND we have a Stripe ID
+        if (newBalance <= 5 && client.auto_replenish && client.stripe_customer_id) {
+            // We call this WITHOUT 'await' so we don't slow down the user's chat response.
+            // It runs in the background.
+            triggerAutoRefill(client.stripe_customer_id);
         }
 
-        // 2. CHECK 1: Must have Active Subscription
-        if (client.status !== 'active') {
-            return { allowed: false, error: "Service Suspended: Subscription is inactive." };
-        }
-
-        // 3. CHECK 2: Must have Credits
-        if (!client.image_credits || client.image_credits <= 0) {
-            return { allowed: false, error: "Service Suspended: Insufficient image_credits." };
-        }
-
-        // 4. If Both Passed: Deduct Credit
-        const { error: updateError } = await supabase
+        // Deduct Credit
+        await supabase
             .from('clients')
-            .update({ image_credits: client.image_credits - 1 })
+            .update({ image_credits: newBalance })
             .eq('id', client.id);
-
-        if (updateError) {
-            console.error("Failed to deduct credit:", updateError);
-            // We allow the request to proceed even if update fails to prevent 
-            // user downtime during minor DB glitches, but we log it.
-        }
 
         return { allowed: true, client: client };
 
     } catch (err) {
-        console.error("Subscription Manager Error:", err);
-        return { allowed: false, error: "Internal validation error." };
+        console.error(err);
+        return { allowed: false, error: "Error" };
     }
 }

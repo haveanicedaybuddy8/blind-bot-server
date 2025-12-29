@@ -11,6 +11,8 @@ import { TaskType } from "@google/generative-ai";
 import { startPersonaWorker } from './persona_worker.js'; 
 import { validateClientAccess } from './subscription_manager.js';
 import { startProductWorker } from './product_worker.js';
+import { setupStripeWebhook } from './stripe_handler.js';
+import { setupStripeWebhook, createPortalSession } from './stripe_handler.js';
 
 const require = createRequire(import.meta.url);
 
