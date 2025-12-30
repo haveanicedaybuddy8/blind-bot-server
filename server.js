@@ -9,16 +9,17 @@ import sharp from 'sharp';
 import { createRequire } from 'module'; 
 import { TaskType } from "@google/generative-ai";
 import { startPersonaWorker } from './persona_worker.js'; 
-import { validateClientAccess } from './subscription_manager.js';
+import { validateClientAccess, deductImageCredit } from './subscription_manager.js'; 
 import { startProductWorker } from './product_worker.js';
-import { setupStripeWebhook } from './stripe_handler.js';
 import { setupStripeWebhook, createPortalSession } from './stripe_handler.js';
+import { handleLeadData } from './leads_manager.js'; 
 
 const require = createRequire(import.meta.url);
 
 dotenv.config();
 const app = express();
 app.use(cors());
+setupStripeWebhook(app, supabase);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
@@ -148,6 +149,17 @@ app.post('/chat', async (req, res) => {
           "product_suggestions": [ { "name": "Exact Name From List", "image": "URL", "id": "index" } ],
           "visualize": boolean,
           "selected_product_name": "Exact Name From List" 
+          "lead_data": {
+              "name": "User Name (or null)",
+              "phone": "Phone (or null)",
+              "email": "Email (or null)",
+              "address": "Address (or null)",
+              "project_summary": "Brief summary of what they want (e.g. '3 zebra blinds for living room')",
+              "appointment_request": "Requested time (or null)",
+              "preferred_method": "text/call/email",
+              "quality_score": 1-10 (judge their purchase intent),
+              "ai_summary": "2 sentence summary of conversation so far"
+          }
         }
 
         YOUR IDENTITY AND RULE:
@@ -256,22 +268,46 @@ app.post('/chat', async (req, res) => {
         } else {
             jsonResponse.product_suggestions = [];
         }
-
-        if (jsonResponse.visualize && jsonResponse.selected_product_name && sourceImageUrl) {
+    let renderUrl = null;
+       if (jsonResponse.visualize && jsonResponse.selected_product_name && sourceImageUrl) {
             const selectedProduct = products.find(p => p.name.toLowerCase() === jsonResponse.selected_product_name.toLowerCase());
             
             if (selectedProduct) {
-                // FALLBACK: If AI description is still null (script hasn't run yet), use plain description
-                const desc = selectedProduct.ai_description || selectedProduct.description;
-                const combinedPrompt = `Install ${selectedProduct.name} (${desc}) on the windows.`;
+                // --- NEW CHARGING LOGIC ---
+                // We only charge IF we are about to generate
+                const canGenerate = await deductImageCredit(supabase, client.id);
+
+                if (canGenerate) {
+                    // 1. Success: Generate the Image
+                    const desc = selectedProduct.ai_description || selectedProduct.description;
+                    const combinedPrompt = `Install ${selectedProduct.name} (${desc}) on the windows.`;
+                    
+                    console.log(`🎨 Generating with prompt: ${combinedPrompt}`);
+                    
+                    renderUrl = await generateRendering(sourceImageUrl, combinedPrompt);
+                    if (renderUrl) jsonResponse.reply += `\n\n[RENDER_URL: ${renderUrl}]`;
                 
-                console.log(`🎨 Generating with prompt: ${combinedPrompt}`);
-                
-                const renderUrl = await generateRendering(sourceImageUrl, combinedPrompt);
-                if (renderUrl) jsonResponse.reply += `\n\n[RENDER_URL: ${renderUrl}]`;
+                } else {
+                    // 2. Failure: No Credits
+                    console.log(`🚫 Generation blocked: Insufficient credits for ${client.company_name}`);
+                    jsonResponse.reply += "\n\n(System: Preview generation skipped. Insufficient image credits. Please top up in Settings.)";
+                    // We turn off visualize so the UI doesn't try to show a broken image
+                    jsonResponse.visualize = false; 
+                }
             }
         }
+        if (jsonResponse.lead_data) {
+            const d = jsonResponse.lead_data;
+            
+            // Inject images into the data payload
+            if (sourceImageUrl) d.new_customer_image = sourceImageUrl;
+            if (renderUrl) d.new_ai_rendering = renderUrl; // Defined in the scope above
 
+            // Only save if we have contact info or if we just generated valuable data
+            if (d.name || d.phone || d.email) {
+                handleLeadData(supabase, client.id, d); 
+            }
+        }
         res.json(jsonResponse);
 
     } catch (err) {
@@ -279,7 +315,27 @@ app.post('/chat', async (req, res) => {
         res.status(500).json({ reply: "Error processing request." });
     }
 });
+app.get('/create-portal-session/:apiKey', async (req, res) => {
+    try {
+        const { apiKey } = req.params;
+        const { data: client } = await supabase
+            .from('clients')
+            .select('stripe_customer_id')
+            .eq('api_key', apiKey)
+            .single();
 
+        if (!client || !client.stripe_customer_id) {
+            return res.status(404).send("No active subscription found. Please contact support.");
+        }
+
+        const url = await createPortalSession(client.stripe_customer_id);
+        res.redirect(url);
+
+    } catch (err) {
+        console.error("Portal Error:", err);
+        res.status(500).send("Error accessing subscription settings.");
+    }
+});
 startPersonaWorker();
 startProductWorker();
 app.listen(3000, () => console.log('🚀 Gallery Agent Running'));
