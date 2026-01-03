@@ -1,0 +1,33 @@
+<div style="width: 100%; height: 600px; text-align: center">
+  <h6><div style="background: #f4f6f8; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; text-align: center;">
+    <p style="font-family: sans-serif; color: #555; margin-bottom: 10px;">👇 Copy this line of code:</p>
+    
+    <div style="background: #2d3436; color: #55efc4; font-family: monospace; padding: 15px; border-radius: 6px; overflow-x: auto; white-space: nowrap; margin-bottom: 15px;" id="code-box">
+        Loading your unique code...
+    </div>
+
+    <button onclick="copyCode()" style="background: #0984e3; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+        📋 Copy to Clipboard
+    </button>
+    <p id="copy-msg" style="color: green; font-size: 12px; margin-top: 5px; display: none;">Copied!</p>
+</div>
+
+<script>
+    // Wait for Softr to load user
+    const checkUser = setInterval(() => {
+        if (window.logged_in_user) {
+            clearInterval(checkUser);
+            const apiKey = window.logged_in_user['api_key'];
+            const script = `<script src="https://blind-bot-server.onrender.com/widget.js" data-api-key="${apiKey}"><\/script>`;
+            document.getElementById('code-box').innerText = script;
+        }
+    }, 500);
+
+    function copyCode() {
+        const code = document.getElementById('code-box').innerText;
+        navigator.clipboard.writeText(code);
+        document.getElementById('copy-msg').style.display = 'block';
+        setTimeout(() => document.getElementById('copy-msg').style.display = 'none', 2000);
+    }
+</script></h6>
+</div>
