@@ -14,6 +14,7 @@ import { startPersonaWorker, forceRetrainClient } from './persona_worker.js';
 import { setupStripeWebhook, createPortalSession } from './stripe_handler.js';
 import { handleLeadData } from './leads_manager.js'; 
 import { setupPreviewRoutes } from './preview_handler.js';
+import { scrapeAndSaveProducts } from './product_scraper.js'; 
 
 const require = createRequire(import.meta.url);
 
@@ -353,6 +354,32 @@ app.post('/train-agent', async (req, res) => {
     } catch (err) {
         console.error("Training Error:", err.message);
         res.status(500).json({ error: "Training failed. Please try again." });
+    }
+});
+app.post('/scrape-products', async (req, res) => {
+    try {
+        const { clientApiKey, websiteUrl } = req.body;
+
+        if (!websiteUrl) return res.status(400).json({ error: "Missing Website URL" });
+
+        // 1. Verify Client
+        const { data: client } = await supabase
+            .from('clients')
+            .select('id')
+            .eq('api_key', clientApiKey)
+            .single();
+
+        if (!client) return res.status(401).json({ error: "Invalid API Key" });
+
+        // 2. Run Scraper
+        // We await this so the user knows when it's done
+        const result = await scrapeAndSaveProducts(supabase, client.id, websiteUrl);
+
+        res.json(result);
+
+    } catch (err) {
+        console.error("Scrape Route Error:", err);
+        res.status(500).json({ error: "Scraping failed." });
     }
 });
 app.listen(3000, () => console.log('🚀 Gallery Agent Running'));
