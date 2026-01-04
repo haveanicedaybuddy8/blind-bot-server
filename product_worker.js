@@ -5,140 +5,129 @@ import axios from 'axios';
 
 dotenv.config();
 
-// Use Gemini 1.5 Flash - Best balance of speed & document reading capabilities
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY);
 
-// ---------------------------------------------------------
-// 1. HELPER: Download Media (Images or PDFs)
-// ---------------------------------------------------------
+// Helper: Download Media
 async function downloadMedia(url) {
     if (!url) return null;
     try {
-        console.log(`      ⬇️ Downloading: ${url}`);
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
-        const buffer = Buffer.from(response.data);
-        
-        // Simple MIME type detection
-        const lowerUrl = url.toLowerCase();
-        let mimeType = "image/jpeg"; // Default
+        const cleanUrl = url.trim().replace(/["\[\]]/g, ''); 
+        if (cleanUrl.length < 5) return null;
+
+        console.log(`      ⬇️ Downloading: ${cleanUrl.substring(0, 40)}...`);
+        const response = await axios.get(cleanUrl, { responseType: 'arraybuffer' });
+        const lowerUrl = cleanUrl.toLowerCase();
+        let mimeType = "image/jpeg"; 
         if (lowerUrl.endsWith('.png')) mimeType = "image/png";
-        if (lowerUrl.endsWith('.webp')) mimeType = "image/webp";
         if (lowerUrl.endsWith('.pdf')) mimeType = "application/pdf";
+        if (lowerUrl.endsWith('.webp')) mimeType = "image/webp";
 
         return {
             inlineData: {
-                data: buffer.toString('base64'),
+                data: Buffer.from(response.data).toString('base64'),
                 mimeType: mimeType
             }
         };
     } catch (e) { 
-        console.error("      ❌ Download failed:", e.message);
+        console.error("      ❌ Download failed for an item:", e.message);
         return null; 
     }
 }
 
-// ---------------------------------------------------------
-// 2. MAIN WORKER
-// ---------------------------------------------------------
 export async function startProductWorker() {
-    console.log("🏭 Product Worker: Running. Watching for new products/files...");
+    console.log("🏭 Universal Spec Worker (With Restrictions): Running...");
 
-    // Run every 30 seconds
     setInterval(async () => {
         try {
-            // Find products that are missing an AI Description
-            // We select both the image AND the file url
+            // Find products needing processing (checking 'var_restrictions' as the flag now)
+            // If restrictions are null, we assume we need to re-scan this item.
             const { data: products, error } = await supabase
                 .from('product_gallery')
                 .select('*')
-                .is('ai_description', null);
+                .is('var_restrictions', null); 
 
             if (error) throw error;
 
             if (products && products.length > 0) {
-                console.log(`📝 Found ${products.length} products to analyze.`);
+                console.log(`📝 Analyzing ${products.length} products...`);
                 
-                // Switch to 1.5 Flash for better Document + Image handling
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                const model = genAI.getGenerativeModel({ 
+                    model: "gemini-3-flash-preview",
+                    generationConfig: { responseMimeType: "application/json" } 
+                });
 
                 for (const product of products) {
                     console.log(`   👉 Processing: ${product.name}`);
                     
                     const inputs = [];
-                    let prompt = "";
 
-                    // A. Prepare The Media Inputs
+                    // 1. PRIMARY SOURCES
                     const filePart = await downloadMedia(product.product_file_url);
-                    const imagePart = await downloadMedia(product.image_url);
+                    const mainImagePart = await downloadMedia(product.image_url);
+                    if (filePart) inputs.push(filePart);
+                    if (mainImagePart) inputs.push(mainImagePart);
 
-                    // B. Construct Prompt based on what we found
-                    if (filePart && imagePart) {
-                        // BEST CASE: We have both File (Specs) + Image (Looks)
-                        inputs.push(filePart);
-                        inputs.push(imagePart);
-                        prompt = `
-                        You are a technical window treatment specialist.
-                        Task: Create a comprehensive product summary for "${product.name}".
-                        
-                        Source 1 (Document): Use this strictly for technical specs, available sizes, colors, mount depths, and restrictions.
-                        Source 2 (Image): Use this for visual description (texture, light filtering appearance).
-
-                        Output a structured summary paragraph covering:
-                        1. Visual Style & Material (from Image).
-                        2. Technical Specifications (Size limits, Min depth, Mount types from Doc).
-                        3. Available Colors/Patterns (from Doc).
-                        4. Functional Benefits (Insulation, Privacy, Motorization).
-                        
-                        Keep it under 80 words. Focus on facts.
-                        `;
-                    } 
-                    else if (filePart) {
-                        // CASE: File Only
-                        inputs.push(filePart);
-                        prompt = `
-                        Read this product document for "${product.name}".
-                        Summarize the key sales details: Available sizes, colors, material types, and installation restrictions.
-                        Keep it under 60 words.
-                        `;
-                    } 
-                    else if (imagePart) {
-                        // CASE: Image Only (Fallback)
-                        inputs.push(imagePart);
-                        prompt = `
-                        Analyze this window treatment image for "${product.name}".
-                        Describe the likely material, light filtering capabilities (sheer vs blackout), and style (roller, zebra, cellular, etc).
-                        Keep it under 50 words.
-                        `;
+                    // 2. GALLERY SOURCES
+                    if (product.gallery_images && Array.isArray(product.gallery_images)) {
+                        const extraImages = product.gallery_images.slice(0, 3);
+                        for (const imgUrl of extraImages) {
+                            const galleryPart = await downloadMedia(imgUrl);
+                            if (galleryPart) inputs.push(galleryPart);
+                        }
                     }
 
-                    // C. Generate and Save
                     if (inputs.length > 0) {
-                        inputs.push(prompt); // Add prompt as the last argument
+                        const prompt = `
+                        You are a Window Treatment Technical Specifier.
+                        Analyze ALL attached images and documents for "${product.name}".
                         
+                        Your goal is to extract the CONFIGURATIONS and RESTRICTIONS.
+                        Output strictly JSON.
+
+                        JSON Structure:
+                        {
+                          "var_transparency": "List opacity/openness options (e.g., '1%, 3%, 5%', 'Blackout').",
+                          "var_control": "List operation systems (e.g., 'Cordless, Wand Tilt, Motorized').",
+                          "var_structure": "List structure variations (e.g. '2-inch Slat', 'Double Cell', 'Flat Fold').",
+                          "var_hardware": "List hardware/valance styles (e.g. 'Square Fascia', 'Cassette', 'Z-Frame').",
+                          "var_extras": "List add-ons (e.g. 'Top-Down/Bottom-Up', 'Cloth Tapes').",
+                          "var_colors": "List primary colors/finishes.",
+                          "var_restrictions": "List CRITICAL limitations. (e.g. 'Max width 96 inches', 'Not for humid areas', 'Indoor use only', 'Requires 3 inch depth'). If none found, write 'Standard installation'.",
+                          "ai_description": "A Complete sales summary."
+                        }
+                        `;
+                        
+                        inputs.push(prompt);
+
                         try {
                             const result = await model.generateContent(inputs);
-                            const description = result.response.text();
+                            const data = JSON.parse(result.response.text());
 
-                            // Save to Supabase
-                            const { error: updateError } = await supabase
+                            await supabase
                                 .from('product_gallery')
-                                .update({ ai_description: description })
+                                .update({
+                                    var_transparency: data.var_transparency,
+                                    var_control: data.var_control,
+                                    var_structure: data.var_structure,
+                                    var_hardware: data.var_hardware,
+                                    var_extras: data.var_extras,
+                                    var_colors: data.var_colors,
+                                    var_restrictions: data.var_restrictions, // <--- New Field
+                                    ai_description: data.ai_description
+                                })
                                 .eq('id', product.id);
                                 
-                            if (updateError) console.error(`      ❌ DB Save Failed: ${updateError.message}`);
-                            else console.log(`      ✅ Saved Description!`);
+                            console.log(`      ✅ Specs & Restrictions Updated.`);
                             
                         } catch (aiErr) {
-                            console.error(`      ❌ AI Generation Failed:`, aiErr.message);
+                            console.error(`      ❌ AI Analysis Failed:`, aiErr.message);
                         }
-                    } else {
-                        console.log(`      ⚠️ No file or image found. Skipping.`);
                     }
                 }
             }
         } catch (err) {
-            console.error("Product Worker Error:", err.message);
+            console.error("Worker Error:", err.message);
         }
-    }, 30000); 
+    }, 15000); 
 }

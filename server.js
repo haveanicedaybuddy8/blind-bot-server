@@ -135,11 +135,26 @@ app.post('/chat', async (req, res) => {
         }
         
         const client = accessCheck.client;
-
         const { data: products } = await supabase
             .from('product_gallery')
-            .select('name, description, ai_description, image_url')
+            .select('name, description, ai_description, image_url, var_transparency, var_control, var_structure, var_hardware, var_extras, var_colors, var_restrictions')
             .eq('client_id', client.id);
+
+        const productContext = products 
+            ? products.map(p => {
+                return `
+                Product: "${p.name}"
+                - Summary: ${p.ai_description || p.description}
+                - Transparency: ${p.var_transparency || "N/A"}
+                - Control/Lift: ${p.var_control || "Standard"}
+                - Structure/Size: ${p.var_structure || "Standard"}
+                - Hardware: ${p.var_hardware || "Standard"}
+                - Extras: ${p.var_extras || "None"}
+                - Colors: ${p.var_colors || "Various"}
+                - CRITICAL RESTRICTIONS: ${p.var_restrictions || "None"}
+                `; 
+              }).join("\n----------------\n") 
+            : "Standard Blinds";
 
         const productNames = products ? products.map(p => p.name).join(", ") : "Standard Blinds";
         
