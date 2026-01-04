@@ -102,26 +102,28 @@ app.get('/client-config/:apiKey', async (req, res) => {
         // FIX 1: We added the new columns to the select list
         const { data: client, error } = await supabase
             .from('clients')
-            .select('primary_color, logo_url, company_name, greeting_override, widget_alignment, widget_side_margin, widget_bottom_margin, widget_height') 
+            .select('primary_color, logo_url, company_name, greeting_override, widget_alignment, widget_side_margin, widget_bottom_margin, widget_height, notification_emails, email') 
             .eq('api_key', apiKey)
             .single();
 
-        if (error || !client) {
-            return res.status(404).json({ error: "Client not found" });
-        }
+        if (error || !client) return res.status(404).json({ error: "Client not found" });
 
-        // Return the customization settings
+        // LOGIC: Send the text string. If null, send the main email as a string.
+        const defaultEmails = client.notification_emails || client.email || "";
+
         res.json({
+            // ... (other fields) ...
             color: client.primary_color || "#333333",
             logo: client.logo_url || "",
             name: client.company_name,
-            greeting: client.greeting_override || "", // FIX 2: Added comma here
+            greeting: client.greeting_override || "",
             alignment: client.widget_alignment || 'right',
             sideMargin: client.widget_side_margin || 20,
             bottomMargin: client.widget_bottom_margin || 20,
-            height: client.widget_height || 600
+            height: client.widget_height || 600,
+            emails: defaultEmails // Sends "rob@test.com" or "rob@test.com, jim@test.com"
         });
-
+        
     } catch (err) {
         console.error("Config Error:", err);
         res.status(500).json({ error: "Server Error" });
@@ -426,6 +428,25 @@ app.post('/scrape-products', async (req, res) => {
     } catch (err) {
         console.error("Scrape Route Error:", err);
         res.status(500).json({ error: "Scraping failed." });
+    }
+});
+app.post('/update-notification-emails', async (req, res) => {
+    try {
+        const { clientApiKey, emails } = req.body; 
+
+        if (!Array.isArray(emails)) return res.status(400).json({ error: "Invalid format" });
+
+        const { error } = await supabase
+            .from('clients')
+            .update({ notification_emails: emails })
+            .eq('api_key', clientApiKey);
+
+        if (error) throw error;
+        res.json({ success: true });
+
+    } catch (err) {
+        console.error("Email Update Error:", err.message);
+        res.status(500).json({ error: "Update failed" });
     }
 });
 app.listen(3000, () => console.log('🚀 Gallery Agent Running'));
