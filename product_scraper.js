@@ -7,70 +7,60 @@ dotenv.config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// =======================================================
-// HELPER: AI MATCHING ENGINE
-// =======================================================
-async function findBestMatch(existingProducts, newItemName) {
-    // If no existing products, obviously it's new
-    if (!existingProducts || existingProducts.length === 0) return { isMatch: false };
-
-    // 1. Simple Check: Exact String Match (Fast)
-    const exact = existingProducts.find(p => p.name.trim().toLowerCase() === newItemName.trim().toLowerCase());
-    if (exact) return { isMatch: true, product: exact };
-
-    // 2. Smart Check: AI Semantic Match (Slower but smart)
+async function analyzeProductCandidate(existingProducts, newItemName, imageUrl) {
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+        // Switch to Gemini 2.0 Flash for speed and better visual recognition
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         
-        // We send the list of names and ask it to pick the winner
         const namesList = existingProducts.map(p => `ID_${p.id}: ${p.name}`).join("\n");
         
         const prompt = `
-        I have a database of Window Treatments:
+        I am a scraper for a Window Blind store. I found an image.
+        
+        Item Name: "${newItemName}"
+        Image URL: "${imageUrl}"
+        
+        EXISTING DATABASE:
         ${namesList}
 
-        I found a new item on a website labeled: "${newItemName}"
+        TASK 1 (FILTER): Is this item likely a "Color Swatch", "Fabric Sample", "Texture Zoom-in", or "Icon"?
+        - Clues: Name is just a color (e.g. "Pink", "Off-White"), URL contains 'swatch', 'chip', 'texture', 'thumb'.
+        - If it is a swatch/sample, return "INVALID".
+        
+        TASK 2 (MATCH): If it is a REAL product (a full blind on a window), is it a variation of an existing one?
+        - If yes, return the ID (e.g. "ID_123").
+        
+        TASK 3 (NEW): If it is a REAL product and NOT in the database, return "NEW".
 
-        TASK: Determine if "${newItemName}" is likely a VARIATION of one of the existing products (e.g., same product but different color/style name) or a COMPLETELY NEW product.
-        
-        RULES:
-        - "Roller Shade - Grey" IS a variation of "Roller Shade".
-        - "Hunter Douglas Roller" IS a variation of "Roller Shade".
-        - "Plantation Shutter" is NOT a variation of "Roller Shade".
-        
-        OUTPUT:
-        - If match found, return strictly the ID (e.g. "ID_123").
-        - If completely new, return "NEW".
+        OUTPUT FORMAT: Just one word: "INVALID", "NEW", or "ID_xxx".
         `;
 
         const result = await model.generateContent(prompt);
         const text = result.response.text().trim();
 
+        if (text.includes("INVALID")) return { type: 'INVALID' };
         if (text.includes("ID_")) {
-            // Extract the ID
             const matchId = text.match(/ID_(\d+)/)[1];
             const parent = existingProducts.find(p => p.id == matchId);
-            if (parent) return { isMatch: true, product: parent };
+            return { type: 'MATCH', product: parent };
         }
-
-        return { isMatch: false };
+        
+        return { type: 'NEW' };
 
     } catch (err) {
-        console.error("   ⚠️ AI Matching failed, defaulting to NEW:", err.message);
-        return { isMatch: false };
+        console.error("   ⚠️ AI Analysis failed, skipping item:", err.message);
+        return { type: 'INVALID' }; // Fail safe: Don't import if we can't check
     }
 }
 
-// =======================================================
-// MAIN SCRAPER FUNCTION
-// =======================================================
 export async function scrapeAndSaveProducts(supabase, clientId, websiteUrl) {
-    console.log(`🕷️ Intelligent Scraper: Scanning ${websiteUrl}`);
+    console.log(`🕷️ Smart Scraper: Scanning ${websiteUrl}`);
     let newCount = 0;
     let mergedCount = 0;
+    let skippedCount = 0;
 
     try {
-        // 1. Get Existing Products (The "Knowledge Base")
+        // 1. Get Existing Products
         const { data: existingProducts } = await supabase
             .from('product_gallery')
             .select('id, name, gallery_images')
@@ -84,21 +74,37 @@ export async function scrapeAndSaveProducts(supabase, clientId, websiteUrl) {
 
         // 3. Extract Candidates
         const candidates = [];
-        $('img').each((i, el) => {
-            const src = $(el).attr('src');
+        
+        // Improved Selector: Try to find images specifically inside product cards first
+        let images = $('.product-card img, .product-item img, .grid-view-item img, .woocommerce-loop-product__link img');
+        if (images.length === 0) images = $('img'); // Fallback to all images if no containers found
+
+        images.each((i, el) => {
+            const src = $(el).attr('src') || $(el).attr('data-src'); // Check data-src for lazy loading
             const alt = $(el).attr('alt');
             
             if (src && !src.endsWith('.svg') && !src.includes('logo') && !src.includes('icon')) {
                 const fullUrl = src.startsWith('http') ? src : new URL(src, websiteUrl).href;
-                
+                const lowerSrc = fullUrl.toLowerCase();
+
+                // --- HEURISTIC FILTERING (The First Gate) ---
+                // Immediately reject images that say 'swatch', 'chip', 'texture', or 'thumb'
+                if (lowerSrc.includes('swatch') || lowerSrc.includes('color') || lowerSrc.includes('texture') || lowerSrc.includes('thumb')) {
+                    return; 
+                }
+
                 // Try to find a meaningful name
                 let name = alt;
                 if (!name || name.length < 3) {
-                    name = $(el).closest('div').find('h2, h3, h4, .product-title, .woocommerce-loop-product__title').first().text().trim();
+                    name = $(el).closest('div').find('h2, h3, h4, .product-title, .name, .woocommerce-loop-product__title').first().text().trim();
                 }
 
+                // If name looks like a color (e.g. "White", "Beige"), assume it's a swatch and skip
+                const badNames = ['white', 'black', 'grey', 'beige', 'pink', 'blue', 'green', 'red', 'sample', 'swatch'];
+                if (name && badNames.includes(name.toLowerCase())) return;
+
                 if (name && name.length > 3 && fullUrl) {
-                    // Prevent duplicate processing within the same run
+                    // Dedup within this run
                     if (!candidates.find(c => c.image_url === fullUrl)) {
                         candidates.push({ name, image_url: fullUrl });
                     }
@@ -106,41 +112,41 @@ export async function scrapeAndSaveProducts(supabase, clientId, websiteUrl) {
             }
         });
 
-        console.log(`   🔎 Found ${candidates.length} images. Analyzing...`);
+        console.log(`   🔎 Found ${candidates.length} potential images. AI is filtering...`);
 
         // 4. Process Each Candidate
         for (const item of candidates) {
             
-            // Step A: Ask AI "Is this new or a variation?"
-            const matchResult = await findBestMatch(existingProducts, item.name);
+            // Ask the AI Judge
+            const result = await analyzeProductCandidate(existingProducts, item.name, item.image_url);
 
-            if (matchResult.isMatch) {
-                // === SCENARIO 1: MERGE INTO EXISTING ===
-                const parent = matchResult.product;
+            if (result.type === 'INVALID') {
+                skippedCount++;
+                console.log(`      🚫 Skipped Swatch/Junk: "${item.name}"`);
+            } 
+            else if (result.type === 'MATCH') {
+                // === MERGE INTO EXISTING ===
+                const parent = result.product;
                 const currentGallery = parent.gallery_images || [];
 
-                // Avoid adding the exact same image twice
                 if (!currentGallery.includes(item.image_url)) {
                     const newGallery = [...currentGallery, item.image_url];
                     
-                    // Update DB
                     await supabase
                         .from('product_gallery')
                         .update({ 
                             gallery_images: newGallery,
-                            // CRITICAL: We trigger the worker to re-scan by setting restrictions to NULL
-                            // This forces the 'Universal Spec Worker' to wake up and see the new photos!
-                            var_restrictions: null 
+                            var_restrictions: null // Trigger re-scan
                         })
                         .eq('id', parent.id);
 
-                    console.log(`      🔗 Merged "${item.name}" into "${parent.name}"`);
+                    console.log(`      🔗 Merged variation into "${parent.name}"`);
                     mergedCount++;
                 }
-
-            } else {
-                // === SCENARIO 2: CREATE NEW PRODUCT ===
-                // Check if we already inserted this exact image in a previous run to be safe
+            } 
+            else if (result.type === 'NEW') {
+                // === CREATE NEW ===
+                // Double check DB specifically for this URL to prevent duplicates from previous runs
                 const { data: duplicate } = await supabase
                     .from('product_gallery')
                     .select('id')
@@ -155,21 +161,16 @@ export async function scrapeAndSaveProducts(supabase, clientId, websiteUrl) {
                         image_url: item.image_url,
                         description: "Imported from website",
                         gallery_images: [], 
-                        ai_description: null, // Triggers description worker
-                        var_restrictions: null // Triggers spec worker
+                        ai_description: null, 
+                        var_restrictions: null 
                     });
                     console.log(`      ✨ Created New: "${item.name}"`);
                     newCount++;
-                    
-                    // Add to local list so future items in this loop can match against it!
-                    // (This handles the case where the page has 5 images of the same NEW product)
-                    // We need to fetch the ID we just made, but for simplicity, we skip that optimization 
-                    // and let the next run handle merges.
                 }
             }
         }
 
-        console.log(`✅ Scraper Done. Created ${newCount} products. Merged ${mergedCount} variations.`);
+        console.log(`✅ Scraper Done. New: ${newCount} | Merged: ${mergedCount} | Rejected Swatches: ${skippedCount}`);
         return { success: true, count: newCount + mergedCount };
 
     } catch (err) {
