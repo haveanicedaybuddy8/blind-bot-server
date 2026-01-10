@@ -453,35 +453,60 @@ app.post('/update-notification-emails', async (req, res) => {
         res.status(500).json({ error: "Update failed" });
     }
 });
+// ==================================================================
+// 5. SAAS CLIENT SUPPORT (Smart Lookup: Key OR Email)
+// ==================================================================
 app.post('/contact-support', async (req, res) => {
     try {
         const { clientApiKey, message, topic, userEmail, priority } = req.body;
 
-        if (!clientApiKey || !message) {
-            return res.status(400).json({ error: "Missing required fields" });
+        // Validation: We need at least a Message and (Key OR Email)
+        if (!message || (!clientApiKey && !userEmail)) {
+            return res.status(400).json({ error: "Please provide your Registered Email or API Key." });
         }
 
-        // 1. Verify Client (Strict Check)
-        const { data: client, error: clientError } = await supabase
-            .from('clients')
-            .select('id, company_name, email, stripe_customer_id')
-            .eq('api_key', clientApiKey)
-            .single();
+        let client = null;
+        let clientError = null;
 
-        if (clientError || !client) {
-            return res.status(404).json({ error: "Client account not found." });
+        // STRATEGY 1: Try finding by API Key first (if provided)
+        if (clientApiKey) {
+            const { data, error } = await supabase
+                .from('clients')
+                .select('id, company_name, email, stripe_customer_id')
+                .eq('api_key', clientApiKey)
+                .maybeSingle(); // Use maybeSingle to avoid 406 errors if not found
+            
+            if (data) client = data;
         }
 
-        // 2. INSERT into NEW 'client_support_tickets' table
+        // STRATEGY 2: If no client found yet, try finding by Email
+        if (!client && userEmail) {
+            // We search for the email in the 'clients' table
+            // Note: This relies on the user typing the email exactly as registered
+            const { data, error } = await supabase
+                .from('clients')
+                .select('id, company_name, email, stripe_customer_id')
+                .ilike('email', userEmail) // Case-insensitive match
+                .maybeSingle();
+
+            if (data) client = data;
+        }
+
+        // If we still don't know who this is, we can't save to the specific client table
+        if (!client) {
+            return res.status(404).json({ error: "Account not found. Please use your registered company email." });
+        }
+
+        // 3. INSERT into 'client_support_tickets'
         const { data: ticket, error: dbError } = await supabase
-            .from('client_support_tickets') // <--- CHANGED TABLE NAME
+            .from('client_support_tickets')
             .insert([
                 {
                     client_id: client.id,
                     topic: topic || 'General',
                     priority: priority || 'Normal',
                     message: message,
-                    user_email: userEmail || client.email,
+                    user_email: userEmail || client.email, // Use what they typed, or fallback to DB email
                     status: 'new'
                 }
             ])
@@ -493,11 +518,11 @@ app.post('/contact-support', async (req, res) => {
             throw new Error("Failed to save ticket.");
         }
 
-        // 3. Send Email Notification (Same as before)
+        // 4. Send Notification Email
         const emailHtml = `
             <h2>New Client Ticket #${ticket.id.slice(0, 8)}</h2>
             <p><strong>Client:</strong> ${client.company_name}</p>
-            <p><strong>Priority:</strong> ${priority || 'Normal'}</p>
+            <p><strong>Identified By:</strong> ${clientApiKey ? 'API Key' : 'Email Lookup'}</p>
             <hr />
             <p>${message.replace(/\n/g, '<br>')}</p>
         `;
@@ -505,8 +530,8 @@ app.post('/contact-support', async (req, res) => {
         await resend.emails.send({
             from: 'Client Support <onboarding@resend.dev>',
             to: ['rob.wen@theblindbots.com'],
-            reply_to: userEmail || client.email,
-            subject: `[Client Support] ${client.company_name} - ${topic}`,
+            reply_to: userEmail,
+            subject: `[Support] ${client.company_name} - ${topic}`,
             html: emailHtml,
         });
 
