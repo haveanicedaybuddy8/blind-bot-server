@@ -1,0 +1,377 @@
+<style>
+  /* Paste your existing CSS styles here */
+  .dash-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 600px;
+    margin: 40px auto;
+    font-family: 'Inter', sans-serif;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  }
+
+  .dash-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 25px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #f3f4f6;
+  }
+
+  .dash-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #111;
+    margin: 0;
+  }
+
+  .status-badge {
+    padding: 4px 12px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: #ecfdf5;
+    color: #059669;
+  }
+
+  .status-badge.inactive {
+    background: #fef2f2;
+    color: #dc2626;
+  }
+
+  .grid-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin-bottom: 25px;
+  }
+
+  .stat-box {
+    background: #f9fafb;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #f3f4f6;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: #6b7280;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  .stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #111;
+    margin-top: 5px;
+  }
+
+  .action-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 25px;
+  }
+
+  .btn-primary {
+    flex: 1;
+    padding: 10px;
+    background: #000;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .btn-outline {
+    flex: 1;
+    padding: 10px;
+    background: #fff;
+    color: #333;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .btn-primary:hover {
+    opacity: 0.9;
+  }
+
+  .btn-outline:hover {
+    background: #f9fafb;
+  }
+
+  .toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f0fdf4;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #bbf7d0;
+    margin-bottom: 25px;
+  }
+
+  .toggle-text h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #166534;
+  }
+
+  .toggle-text p {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: #15803d;
+  }
+
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #cbd5e1;
+    transition: .4s;
+    border-radius: 34px;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+  }
+
+  input:checked+.slider {
+    background-color: #16a34a;
+  }
+
+  input:checked+.slider:before {
+    transform: translateX(20px);
+  }
+
+  .coupon-box {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .input-group {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .input-field {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+  }
+</style>
+
+<div id="widget-container" class="dash-card">
+  <div id="loading">Loading details...</div>
+
+  <div id="dashboard" style="display:none;">
+    <div class="dash-header">
+      <h2 class="dash-title">Membership</h2>
+      <span id="status-badge" class="status-badge">--</span>
+    </div>
+
+    <div class="grid-stats">
+      <div class="stat-box">
+        <div class="stat-label">Trial Ends</div>
+        <div id="trial-date" class="stat-value">--</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Image Credits</div>
+        <div id="credit-count" class="stat-value">--</div>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button onclick="handleAction('buy_credits')" class="btn-primary">Buy Credits ($100)</button>
+
+      <button id="btn-subscribe" onclick="handleAction('buy_subscription')" class="btn-outline" style="display:none; color: #047857; border-color: #047857;">
+        Activate Subscription
+      </button>
+
+      <button id="btn-manage" onclick="handleAction('manage_subscription')" class="btn-outline" style="display:none;">
+        Manage Billing
+      </button>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-text">
+        <h4>Auto-Refill Credits</h4>
+        <p>Charge $100 when credits < 5</p>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="auto-toggle" onchange="toggleAutoFill()">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="coupon-box">
+      <div class="stat-label">Promo Code</div>
+      <div class="input-group">
+        <input type="text" id="coupon-code" class="input-field" placeholder="Enter code">
+        <button onclick="redeemCoupon()" id="coupon-btn" class="btn-outline" style="flex: 0 0 80px;">Apply</button>
+      </div>
+      <div id="msg" style="margin-top:8px; font-size:13px; font-weight:500;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // UPDATE THIS TO YOUR REAL SUPABASE URL
+  const API_URL = 'https://iashgsuvdedpdmytdbgw.supabase.co/functions/v1/member-dashboard';
+  
+  async function loadData() {
+    if (!window.logged_in_user) return;
+    try {
+      const res = await fetch(`${API_URL}?email=${window.logged_in_user['email']}`);
+      const data = await res.json();
+      
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+
+      // Status Badge
+      document.getElementById('status-badge').innerText = data.status || 'Inactive';
+      if(data.status !== 'active') document.getElementById('status-badge').classList.add('inactive');
+      
+      // Dates & Credits
+      const dateText = data.trial_ends_at ? new Date(data.trial_ends_at).toLocaleDateString() : 'None';
+      document.getElementById('trial-date').innerText = dateText;
+      document.getElementById('credit-count').innerText = data.image_credits || 0;
+      document.getElementById('auto-toggle').checked = data.auto_replenish;
+
+      // --- LOGIC: WHICH BUTTON TO SHOW? ---
+      const isPaidMember = data.status === 'active' && data.stripe_customer_id;
+      
+      if (isPaidMember) {
+        // Show "Manage Billing" (Portal)
+        document.getElementById('btn-manage').style.display = 'block';
+      } else {
+        // Show "Activate Subscription" (Checkout)
+        document.getElementById('btn-subscribe').style.display = 'block';
+      }
+
+    } catch (e) { document.getElementById('loading').innerText = "Error loading data."; }
+  }
+
+  async function handleAction(actionType) {
+    const btn = event.target;
+    const originalText = btn.innerText;
+    
+    if(actionType === 'buy_credits') btn.innerText = "Opening Checkout...";
+    if(actionType === 'buy_subscription') btn.innerText = "Opening Checkout...";
+    if(actionType === 'manage_subscription') btn.innerText = "Opening Portal...";
+
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          email: window.logged_in_user['email'], 
+          action: actionType,
+          payload: { returnUrl: window.location.href }
+        })
+      });
+      const result = await res.json();
+      if (result.url) window.top.location.href = result.url;
+      else alert(result.error || "Action Failed");
+    } catch (e) { alert("System Error"); }
+    btn.innerText = originalText;
+  }
+
+  async function toggleAutoFill() {
+    const isChecked = document.getElementById('auto-toggle').checked;
+    await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        email: window.logged_in_user['email'], 
+        action: 'toggle_auto',
+        payload: { enabled: isChecked }
+      })
+    });
+  }
+
+  async function redeemCoupon() {
+  const code = document.getElementById('coupon-code').value;
+  if(!code) return;
+  const btn = document.getElementById('coupon-btn');
+  const msg = document.getElementById('msg');
+  
+  btn.innerText = "...";
+  try {
+  const res = await fetch(API_URL, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+  email: window.logged_in_user['email'],
+  action: 'redeem_coupon',
+  payload: {
+  couponCode: code,
+  returnUrl: window.location.href
+  }
+  })
+  });
+  
+  const data = await res.json();
+  
+  // --- FIX STARTS HERE ---
+  // 1. If the server sends a Checkout URL, redirect the user immediately
+  if (data.url) {
+  window.location.href = data.url;
+  return;
+  }
+  // -----------------------
+  
+  if(res.ok) {
+  msg.style.color = 'green';
+  msg.innerText = data.message || "Coupon applied! Refreshing...";
+  setTimeout(() => location.reload(), 1500);
+  } else {
+  msg.style.color = 'red';
+  msg.innerText = data.error || "Invalid coupon";
+  btn.innerText = "Apply";
+  }
+  
+  } catch (e) {
+  console.error(e);
+  msg.innerText = "System Error";
+  btn.innerText = "Apply";
+  }
+  }
+
+  window.addEventListener('load', () => setTimeout(loadData, 500));
+</script>

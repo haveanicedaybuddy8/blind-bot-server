@@ -1,16 +1,71 @@
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Globe, TestTube } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { 
+  CheckCircle2, 
+  Globe, 
+  TestTube, 
+  AlertTriangle, 
+  Copy, 
+  Check, 
+  Code2, 
+  Layout, 
+  ShoppingBag,
+  Server,
+  Loader2
+} from "lucide-react";
 
 export default function Block() {
+  const [apiKey, setApiKey] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  // LOGIC: Poll Softr for the logged-in user's API Key
+  useEffect(() => {
+    const checkUser = setInterval(() => {
+      // Check if Softr has loaded the user object globally
+      // @ts-ignore - explicitly ignoring TS error since window.logged_in_user is injected by Softr
+      if (window.logged_in_user && window.logged_in_user['api_key']) {
+        // @ts-ignore
+        setApiKey(window.logged_in_user['api_key']);
+        setLoading(false);
+        clearInterval(checkUser);
+      }
+    }, 500);
+
+    // Stop checking after 10 seconds to prevent infinite loops if something breaks
+    const timeout = setTimeout(() => {
+      clearInterval(checkUser);
+      if (loading) setLoading(false); // Stop loading spinner even if failed
+    }, 10000);
+
+    return () => {
+      clearInterval(checkUser);
+      clearTimeout(timeout);
+    };
+  }, [loading]);
+
+  // Construct the snippet dynamically
+  const codeSnippet = apiKey 
+    ? `<script src="https://blind-bot-server.onrender.com/widget.js" data-api-key="${apiKey}" async></script>`
+    : "Loading your unique code...";
+
+  const handleCopy = () => {
+    if (!apiKey) return; // Prevent copying if key isn't loaded
+    navigator.clipboard.writeText(codeSnippet);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const platforms = [
     {
       name: "Weebly",
       logo: "https://cdn.worldvectorlogo.com/logos/weebly-1.svg",
       steps: [
-        "Go to your Weebly Editor",
-        "Click Settings (at the top) → SEO (on the left)",
-        "Find the box that says 'Footer Code'",
-        "Paste your code there",
+        "Go to Settings (top nav) → SEO (left nav)",
+        "Scroll down to 'Footer Code'",
+        "Paste the snippet in the box",
         "Click Save and Publish"
       ]
     },
@@ -18,97 +73,201 @@ export default function Block() {
       name: "Wix",
       logo: "https://cdn.worldvectorlogo.com/logos/wix-2.svg",
       steps: [
-        "Go to your Wix Dashboard",
-        "Click Settings → Custom Code (under 'Advanced')",
+        "Go to Settings → Custom Code (under Advanced)",
         "Click + Add Custom Code",
-        "Paste the code in the box",
-        "Select 'Place Code in Body - End'",
+        "Paste snippet and name it 'AI Chat Widget'",
+        "Select 'Add Code to Pages: All Pages' (Critical)",
+        "Select 'Place Code in: Body - End'",
         "Click Apply"
       ]
     },
     {
       name: "Squarespace",
       logo: "https://cdn.worldvectorlogo.com/logos/squarespace-1.svg",
+      badge: "Business Plan Req.",
       steps: [
         "Go to Website → Website Tools → Code Injection",
         "Find the box labeled 'Footer'",
-        "Paste the code there",
+        "Paste the snippet there",
+        "Click Save (top left)"
+      ]
+    },
+    {
+      name: "Shopify",
+      icon: ShoppingBag,
+      steps: [
+        "Go to Online Store → Themes",
+        "Click the three dots (...) → Edit code",
+        "Find 'theme.liquid' in the file list",
+        "Scroll to the very bottom",
+        "Paste snippet immediately before the </body> tag",
         "Click Save"
       ]
     },
     {
       name: "WordPress",
       logo: "https://cdn.worldvectorlogo.com/logos/wordpress-blue.svg",
+      subtitle: "Recommended Method (Plugin)",
       steps: [
-        "Install a free plugin called 'WPCode' (or 'Insert Headers and Footers')",
+        "Install free plugin 'WPCode' or 'Insert Headers and Footers'",
         "Go to Code Snippets → Header & Footer",
-        "Paste the code in the Footer box",
+        "Paste snippet into the 'Footer' box",
         "Click Save Changes"
       ]
     },
     {
-      name: "All Other Platforms",
-      subtitle: "GoDaddy, Shopify, Webflow, etc.",
+      name: "Webflow",
+      icon: Layout,
+      badge: "Site Plan Req.",
+      steps: [
+        "Go to Project Settings → Custom Code tab",
+        "Scroll to 'Footer Code'",
+        "Paste the snippet there",
+        "Click Save Changes",
+        "Publish your site to see changes"
+      ]
+    },
+    {
+      name: "GoDaddy",
       icon: Globe,
       steps: [
-        "Look for a button or element called 'Embed Code', 'Custom HTML', or 'Add Section'",
-        "If you don't see that, go to your Settings and look for 'Header/Footer Code'",
-        "Paste the code there",
-        "Publish your site to see it live"
+        "Open Website Builder → Scroll to Footer area",
+        "Click 'Add Section' → Search 'HTML' or 'Embed Code'",
+        "Paste snippet into the code box",
+        "Ensure section is in the global footer (so it appears on all pages)",
+        "Click Publish"
+      ]
+    },
+    {
+      name: "Google Sites",
+      icon: Server,
+      steps: [
+        "Scroll to bottom → Click 'Edit Footer'",
+        "Select Embed → Embed Code",
+        "Paste snippet → Click Next → Insert",
+        "Resize placeholder to be invisible if needed",
+        "Publish site"
+      ]
+    },
+    {
+      name: "Custom / HTML / Other",
+      subtitle: "For custom coded sites or other builders",
+      icon: Code2,
+      steps: [
+        "Locate your main layout file (e.g., footer.php, layout.html)",
+        "Find the closing </body> tag",
+        "Paste the snippet immediately before that tag",
+        "Ensure this file is loaded globally across your entire domain"
       ]
     }
   ];
 
   return (
-    <div className="container py-12 max-w-5xl">
+    <div className="container py-12 max-w-5xl mx-auto px-4">
+      {/* Header Section */}
       <div className="text-center mb-12">
         <h1 className="text-4xl font-bold text-foreground mb-4">
-          How to Add Your Code to Your Website
+          Technical Installation Guide
         </h1>
         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          Follow these simple steps for your website platform. No coding experience needed!
+          Inject the AI Sales Assistant into your website to start capturing leads instantly.
         </p>
       </div>
 
-      <div className="space-y-6 mb-12">
+      {/* The Code Snippet Section */}
+      <Card className="mb-12 border-primary/20 shadow-md">
+        <CardHeader className="bg-primary/5 border-b border-primary/10">
+          <div className="flex items-center gap-2">
+            <Code2 className="w-5 h-5 text-primary" />
+            <CardTitle>Step 1: Get Your Code Snippet</CardTitle>
+          </div>
+          <CardDescription>
+            Copy this line exactly. It uses your unique API key.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-6 space-y-4">
+          
+          {/* Dynamic Code Box */}
+          <div className="relative group">
+            <div className={`bg-slate-950 text-slate-50 p-4 rounded-lg font-mono text-sm break-all pr-12 flex items-center min-h-[3.5rem] ${loading ? 'justify-center text-slate-400' : ''}`}>
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Generating unique code...
+                </>
+              ) : apiKey ? (
+                codeSnippet
+              ) : (
+                <span className="text-red-400">Error: Could not find API Key. Please ensure you are logged in.</span>
+              )}
+            </div>
+            
+            <Button
+              size="icon"
+              variant="secondary"
+              className="absolute right-2 top-2 h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={handleCopy}
+              disabled={loading || !apiKey}
+            >
+              {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+            </Button>
+          </div>
+
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-4 flex gap-3 items-start text-amber-800 dark:text-amber-200">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <strong className="font-semibold block mb-1">Critical: Sitewide Adoption</strong>
+              To ensure the chat session persists when customers navigate from "Home" to "Gallery," you must place this code in a <strong>Global Footer</strong> or <strong>Header</strong>. Do not just paste it on a single landing page.
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold mb-2">Step 2: Choose Your Platform</h2>
+        <p className="text-muted-foreground">Find your website builder below for specific instructions.</p>
+      </div>
+
+      {/* Platform Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
         {platforms.map((platform, idx) => {
-          const Icon = platform.icon;
+          const Icon = platform.icon || Globe;
           return (
-            <Card key={idx} className="border-2 hover:border-primary/50 transition-colors">
-              <CardHeader>
+            <Card key={idx} className="border hover:border-primary/50 transition-colors flex flex-col h-full">
+              <CardHeader className="pb-4">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-primary/10 rounded-lg flex items-center justify-center w-12 h-12">
+                  <div className="p-2 bg-primary/10 rounded-lg flex items-center justify-center w-12 h-12 flex-shrink-0">
                     {platform.logo ? (
                       <img src={platform.logo} alt={`${platform.name} logo`} className="w-8 h-8 object-contain" />
-                    ) : Icon ? (
+                    ) : (
                       <Icon className="w-6 h-6 text-primary" />
-                    ) : null}
+                    )}
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-2xl">If you use {platform.name}, follow these steps:</CardTitle>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle className="text-xl">{platform.name}</CardTitle>
                       {platform.badge && (
-                        <Badge variant="secondary" className="text-xs">
+                        <Badge variant="secondary" className="text-xs whitespace-nowrap">
                           {platform.badge}
                         </Badge>
                       )}
                     </div>
                     {platform.subtitle && (
-                      <CardDescription className="text-sm mt-1">
+                      <CardDescription className="text-xs mt-1 truncate">
                         {platform.subtitle}
                       </CardDescription>
                     )}
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex-1">
                 <ol className="space-y-3">
                   {platform.steps.map((step, stepIdx) => (
-                    <li key={stepIdx} className="flex gap-3">
-                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center font-semibold text-sm">
+                    <li key={stepIdx} className="flex gap-3 text-sm">
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs mt-0.5">
                         {stepIdx + 1}
                       </div>
-                      <p className="text-foreground pt-0.5 leading-relaxed">{step}</p>
+                      <p className="text-foreground/90 leading-relaxed">{step}</p>
                     </li>
                   ))}
                 </ol>
@@ -118,58 +277,54 @@ export default function Block() {
         })}
       </div>
 
+      {/* Verification Section */}
       <Card className="border-2 border-primary bg-primary/5">
         <CardHeader>
           <div className="flex items-center gap-3">
             <div className="p-2 bg-primary rounded-lg">
               <TestTube className="w-6 h-6 text-primary-foreground" />
             </div>
-            <CardTitle className="text-2xl">Final Check: Did It Work?</CardTitle>
+            <CardTitle className="text-2xl">Final Check: Verifying Installation</CardTitle>
           </div>
           <CardDescription className="text-base">
-            Follow these steps to verify your code is working correctly
+            Don't skip this! Ensure your bot is live and capturing leads.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ol className="space-y-4">
-            <li className="flex gap-3">
-              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
-                1
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs">1</div>
+                Open Incognito Mode
               </div>
-              <div>
-                <p className="text-foreground font-medium mb-1">Open in Private Mode</p>
-                <p className="text-muted-foreground text-sm">
-                  Open your website in an Incognito/Private Window (this ensures you aren't seeing an old cached version)
-                </p>
+              <p className="text-sm text-muted-foreground pl-8">
+                Open your website in a Private/Incognito window. This ensures you aren't seeing an old cached version.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs">2</div>
+                Check the Corner
               </div>
-            </li>
-            <li className="flex gap-3">
-              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
-                2
+              <p className="text-sm text-muted-foreground pl-8">
+                Look for the chat bubble in the bottom right. It should appear within a few seconds.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs">3</div>
+                Test Navigation
               </div>
-              <div>
-                <p className="text-foreground font-medium mb-1">Look for the Chat Bubble</p>
-                <p className="text-muted-foreground text-sm">
-                  Check the bottom right corner of your website for the chat bubble
-                </p>
-              </div>
-            </li>
-            <li className="flex gap-3">
-              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
-                3
-              </div>
-              <div>
-                <p className="text-foreground font-medium mb-1">Test It Out</p>
-                <p className="text-muted-foreground text-sm">
-                  Say "Hello" to it and make sure it responds!
-                </p>
-              </div>
-            </li>
-          </ol>
-          <div className="mt-6 p-4 bg-background rounded-lg border flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-muted-foreground pl-8">
+                Click to a different page (e.g., from Home to About Us). The chat bubble should remain visible.
+              </p>
+            </div>
+          </div>
+          
+          <div className="mt-8 p-4 bg-background rounded-lg border flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-muted-foreground">
-              <strong className="text-foreground">Pro Tip:</strong> If you don't see the chat bubble, wait a few minutes and refresh the page. Some platforms take a little time to update.
+              <strong className="text-foreground">Success Indicator:</strong> If you see the bubble on multiple pages and it remembers your conversation history as you navigate, the installation is correct.
             </p>
           </div>
         </CardContent>

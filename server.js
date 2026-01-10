@@ -15,6 +15,8 @@ import { setupStripeWebhook, createPortalSession } from './stripe_handler.js';
 import { handleLeadData } from './leads_manager.js'; 
 import { setupPreviewRoutes } from './preview_handler.js';
 import { scrapeAndSaveProducts } from './product_scraper.js'; 
+import { setupStatsRoutes } from './stats_handler.js';
+import { Resend } from 'resend';
 
 const require = createRequire(import.meta.url);
 
@@ -25,6 +27,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 setupStripeWebhook(app, supabase);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
+setupStatsRoutes(app, supabase);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -447,6 +451,70 @@ app.post('/update-notification-emails', async (req, res) => {
     } catch (err) {
         console.error("Email Update Error:", err.message);
         res.status(500).json({ error: "Update failed" });
+    }
+});
+app.post('/contact-support', async (req, res) => {
+    try {
+        const { clientApiKey, message, topic, userEmail, priority } = req.body;
+
+        if (!clientApiKey || !message) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        // 1. Verify Client (Strict Check)
+        const { data: client, error: clientError } = await supabase
+            .from('clients')
+            .select('id, company_name, email, stripe_customer_id')
+            .eq('api_key', clientApiKey)
+            .single();
+
+        if (clientError || !client) {
+            return res.status(404).json({ error: "Client account not found." });
+        }
+
+        // 2. INSERT into NEW 'client_support_tickets' table
+        const { data: ticket, error: dbError } = await supabase
+            .from('client_support_tickets') // <--- CHANGED TABLE NAME
+            .insert([
+                {
+                    client_id: client.id,
+                    topic: topic || 'General',
+                    priority: priority || 'Normal',
+                    message: message,
+                    user_email: userEmail || client.email,
+                    status: 'new'
+                }
+            ])
+            .select()
+            .single();
+
+        if (dbError) {
+            console.error("Database Insert Error:", dbError);
+            throw new Error("Failed to save ticket.");
+        }
+
+        // 3. Send Email Notification (Same as before)
+        const emailHtml = `
+            <h2>New Client Ticket #${ticket.id.slice(0, 8)}</h2>
+            <p><strong>Client:</strong> ${client.company_name}</p>
+            <p><strong>Priority:</strong> ${priority || 'Normal'}</p>
+            <hr />
+            <p>${message.replace(/\n/g, '<br>')}</p>
+        `;
+
+        await resend.emails.send({
+            from: 'Client Support <onboarding@resend.dev>',
+            to: ['rob.wen@theblindbots.com'],
+            reply_to: userEmail || client.email,
+            subject: `[Client Support] ${client.company_name} - ${topic}`,
+            html: emailHtml,
+        });
+
+        res.json({ success: true, ticketId: ticket.id });
+
+    } catch (err) {
+        console.error("Support Route Error:", err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 app.listen(3000, () => console.log('🚀 Gallery Agent Running'));

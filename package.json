@@ -24,7 +24,7 @@
     "langchain": "^1.1.5",
     "nodemailer": "^7.0.12",
     "pdf-extraction": "^1.0.2",
-    "resend": "^6.6.0",
+    "resend": "^6.7.0",
     "sharp": "^0.34.5",
     "stripe": "^20.0.0"
   }
