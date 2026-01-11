@@ -1,97 +1,112 @@
-import { sendLeadNotification } from './email_handler.js';
+import { createClient } from '@supabase/supabase-js';
+
+// Helper: Append new URL to existing gallery list
+function appendToGallery(existingData, newUrl) {
+    if (!newUrl) return existingData;
+
+    let gallery = [];
+
+    // Handle various existing formats (Array, string, or null)
+    if (Array.isArray(existingData)) {
+        gallery = [...existingData];
+    } else if (typeof existingData === 'string' && existingData.length > 0) {
+        // Safe parse if it looks like a JSON string
+        if (existingData.startsWith('[')) {
+            try { gallery = JSON.parse(existingData); } catch(e) { gallery = [existingData]; }
+        } else if (existingData.startsWith('{')) {
+             // Handle Postgres array string format '{img1, img2}' just in case
+            gallery = existingData.replace(/[{}]/g, '').split(',');
+        } else {
+            gallery = [existingData];
+        }
+    }
+
+    // Add new URL if not duplicate
+    if (!gallery.includes(newUrl)) {
+        gallery.push(newUrl);
+    }
+    return gallery;
+}
+
+function isValidLead(data) {
+    return (data.name || data.phone || data.email || data.new_customer_image);
+}
 
 export async function handleLeadData(supabase, clientId, leadData) {
-    // 1. Safety Check: Don't save empty ghosts
-    if (!leadData.name && !leadData.phone && !leadData.email) return;
-
     try {
-        // 2. DEDUPLICATION: Check if this person exists already
-        // We search for a lead belonging to this Client that matches the Email OR Phone
-        let query = supabase
-            .from('leads')
-            .select('*')
-            .eq('client_id', clientId);
+        if (!isValidLead(leadData)) return null;
 
+        console.log(`💾 Saving Lead for Client ${clientId}...`);
+
+        // 1. Find Existing Lead (Deduplicate by Phone or Email)
+        // We look for matches to merge data
+        let query = supabase.from('leads').select('*').eq('client_id', clientId);
+        
         const conditions = [];
         if (leadData.email) conditions.push(`customer_email.eq.${leadData.email}`);
         if (leadData.phone) conditions.push(`customer_phone.eq.${leadData.phone}`);
-
+        
         let existingLead = null;
 
-        // Only run the search if we have a phone or email to match against
         if (conditions.length > 0) {
-            const { data: found } = await query.or(conditions.join(','));
-            
-            if (found && found.length > 0) {
-                // If multiple matches (rare), grab the most recent one
-                existingLead = found.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-            }
+            const { data: existing } = await query.or(conditions.join(','));
+            if (existing && existing.length > 0) existingLead = existing[0];
         }
 
-        // 3. Prepare the data payload
-        // We use "leadData.x || existing.x" to ensure we don't accidentally overwrite data with nulls
+        // 2. Prepare Data (MAPPED EXACTLY TO YOUR CSV HEADERS)
         const finalData = {
             client_id: clientId,
+            
+            // --- Contact Info ---
             customer_name: leadData.name || (existingLead ? existingLead.customer_name : null),
-            customer_email: leadData.email || (existingLead ? existingLead.customer_email : null),
             customer_phone: leadData.phone || (existingLead ? existingLead.customer_phone : null),
+            customer_email: leadData.email || (existingLead ? existingLead.customer_email : null),
+            customer_address: leadData.address || (existingLead ? existingLead.customer_address : null),
+            
+            // --- Project Details ---
             project_summary: leadData.project_summary || (existingLead ? existingLead.project_summary : null),
-            // If there's a new render, use it; otherwise keep the old one
-            ai_rendering_url: leadData.new_ai_rendering || (existingLead ? existingLead.ai_rendering_url : null),
-            updated_at: new Date().toISOString()
+            appointment_request: leadData.appointment_request || (existingLead ? existingLead.appointment_request : null),
+            preferred_method: leadData.preferred_method || (existingLead ? existingLead.preferred_method : null),
+            
+            // --- AI Analysis ---
+            quality_score: leadData.quality_score || (existingLead ? existingLead.quality_score : null),
+            ai_summary: leadData.ai_summary || (existingLead ? existingLead.ai_summary : null),
+            
+            // --- GALLERY (Appending Logic) ---
+            customer_images: appendToGallery(
+                (existingLead ? existingLead.customer_images : []), 
+                leadData.new_customer_image
+            ),
+            
+            ai_rendering_url: appendToGallery(
+                (existingLead ? existingLead.ai_rendering_url : []), 
+                leadData.new_ai_rendering
+            ),
+            
+            // --- Metadata ---
+            last_updated: new Date().toISOString()
         };
 
-        let shouldNotify = false;
-
+        // 3. Save to Supabase
         if (existingLead) {
-            // === UPDATE PATH (Existing Customer) ===
-            
-            // LOGIC: Only email if we gained NEW critical info
-            const justGotEmail = leadData.email && !existingLead.customer_email;
-            const justGotPhone = leadData.phone && !existingLead.customer_phone;
-            const justGotRender = leadData.new_ai_rendering && !existingLead.ai_rendering_url;
-
-            if (justGotEmail || justGotPhone || justGotRender) {
-                shouldNotify = true;
-                console.log(`🔔 Triggering notification: Lead added new info.`);
-            } else {
-                console.log(`🔕 Silent Update: No new contact details added.`);
-            }
-
-            const { error } = await supabase
-                .from('leads')
-                .update(finalData)
-                .eq('id', existingLead.id);
-            
-            if (error) throw error;
-
-        } else {
-            // === INSERT PATH (Brand New Customer) ===
-            shouldNotify = true; // Always notify for a brand new lead
-            
-            const { error } = await supabase
-                .from('leads')
-                .insert([finalData]);
-                
-            if (error) throw error;
-            console.log(`✅ New Lead Created: ${finalData.customer_name}`);
+             finalData.id = existingLead.id;
         }
 
-        // 4. Send Email (Only if flagged)
-        if (shouldNotify) {
-            const { data: client } = await supabase
-                .from('clients')
-                .select('notification_emails, email')
-                .eq('id', clientId)
-                .single();
+        const { data, error } = await supabase
+            .from('leads')
+            .upsert(finalData)
+            .select();
 
-            if (client) {
-                const recipients = client.notification_emails || client.email;
-                await sendLeadNotification(recipients, finalData);
-            }
+        if (error) {
+            console.error("❌ Database Error:", error.message);
+            throw error;
         }
+
+        console.log("✅ Lead Saved:", data[0].id);
+        return data[0];
 
     } catch (err) {
-        console.error("❌ Lead Manager Error:", err.message);
+        console.error("Lead Manager Fault:", err);
+        return null;
     }
 }
